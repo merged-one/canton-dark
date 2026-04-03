@@ -199,16 +199,17 @@ const objectSchema = <T extends Record<string, unknown>>(
 
     for (const [key, schema] of Object.entries(shape)) {
       const nextPath = `${path}.${key}`;
+      const rawValue = record[key];
 
-      if (record[key] === undefined) {
-        if (schema.optional === true) {
-          continue;
-        }
-
+      if (rawValue === undefined && schema.optional !== true) {
         throw new ContractValidationError(nextPath, "is required");
       }
 
-      result[key] = schema.parse(record[key], nextPath);
+      const parsed = schema.parse(rawValue, nextPath);
+
+      if (parsed !== undefined) {
+        result[key] = parsed;
+      }
     }
 
     return result as T;

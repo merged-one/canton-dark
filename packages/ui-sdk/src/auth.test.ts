@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildRoleUrl, resolvePairId, resolveSession, saveSession } from "./auth";
+import { buildRoleUrl, demoIdentities, resolvePairId, resolveSession, saveSession } from "./auth";
 
 const createStorage = () => {
   const values = new Map<string, string>();
@@ -76,5 +76,20 @@ describe("auth helpers", () => {
       role: "subscriber"
     });
     expect(resolvePairId("pair-fallback", undefined)).toBe("pair-fallback");
+  });
+
+  it("throws when a role has no configured demo identities", () => {
+    const original = [...demoIdentities.operator];
+    const identities = demoIdentities.operator as unknown as typeof original;
+
+    identities.splice(0, identities.length);
+
+    try {
+      expect(() => resolveSession("operator", undefined, undefined)).toThrow(
+        "No demo identities are configured for role operator."
+      );
+    } finally {
+      identities.push(...original);
+    }
   });
 });

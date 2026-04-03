@@ -5,7 +5,7 @@ export const humanize = (value: string): string =>
   value
     .split(/[_\s-]+/u)
     .filter((part) => part.length > 0)
-    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
 
 export const renderCode = (value: string): string =>

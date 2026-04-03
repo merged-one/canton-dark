@@ -259,6 +259,14 @@ describe("api-contract runtime schemas", () => {
       state: "active"
     });
     expect(
+      pausePairRequestSchema.parse({
+        reason: undefined,
+        state: "paused"
+      })
+    ).toEqual({
+      state: "paused"
+    });
+    expect(
       grantAccessRequestSchema.parse({
         subjectId: "subscriber-1",
         role: "subscriber"

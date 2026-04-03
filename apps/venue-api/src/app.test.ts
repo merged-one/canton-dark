@@ -63,6 +63,7 @@ describe("venue-api", () => {
         mode: "SingleDealerPair",
         operatorId: "operator-2",
         dealerId: "dealer-beta",
+        pairId: "pair-api-flow",
         jurisdiction: "US",
         rulebookVersion: "v1",
         rulebookSummary: "initial"
@@ -71,6 +72,26 @@ describe("venue-api", () => {
     const pair = pairReply.body as { pairId: string };
 
     expect(pairReply.status).toBe(201);
+    expect(pair.pairId).toBe("pair-api-flow");
+
+    const activeReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/pause`,
+      headers: {
+        "x-actor-id": "operator-2"
+      },
+      body: {
+        state: "active"
+      }
+    });
+
+    expect(activeReply.status).toBe(200);
+    expect(activeReply.body).toMatchObject({
+      pairId: "pair-api-flow",
+      pauseState: {
+        state: "active"
+      }
+    });
 
     const accessReply = await api.handleRequest({
       method: "POST",

@@ -15,6 +15,7 @@ import {
 
 describe("render helpers", () => {
   it("humanizes tokens and renders code/status fragments", () => {
+    expect(humanize("")).toBe("");
     expect(humanize("quote_expired")).toBe("Quote Expired");
     expect(humanize("  multi-stage_status ")).toBe("Multi Stage Status");
     expect(renderCode("pair-demo")).toContain("pair-demo");
@@ -29,6 +30,14 @@ describe("render helpers", () => {
     expect(renderActionButton({ action: "select-rfq", id: "rfq-1", label: "Quote RFQ" })).toContain(
       'class="button button"'
     );
+    expect(
+      renderActionButton({
+        action: "accept-quote",
+        id: "quote-1",
+        label: "Accept quote",
+        tone: "button-primary"
+      })
+    ).toContain('class="button button-primary"');
   });
 
   it("derives metrics and latest actionable records for each role", () => {

@@ -12,6 +12,8 @@ describe("adapters-memory", () => {
   it("provides deterministic clocks and seeded ids", () => {
     const clock = createDeterministicClock("2026-04-02T00:00:00.000Z");
     const ids = createSeededIdGenerator(123);
+    const defaultEnvironment = createMemoryVenueEnvironment();
+    const defaultIds = createSeededIdGenerator(424242);
 
     expect(clock.now().toISOString()).toBe("2026-04-02T00:00:00.000Z");
     clock.advanceBy(5_000);
@@ -21,6 +23,8 @@ describe("adapters-memory", () => {
     expect(ids.seed).toBe(123);
     expect(ids.nextId("pair")).toBe("pair-00003f-000001");
     expect(ids.nextId("pair")).toBe("pair-00003f-000002");
+    expect(defaultEnvironment.idGenerator.seed).toBe(424242);
+    expect(defaultEnvironment.idGenerator.nextId("pair")).toBe(defaultIds.nextId("pair"));
   });
 
   it("exposes direct ledger and audit primitives for deterministic tests", async () => {

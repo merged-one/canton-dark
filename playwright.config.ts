@@ -7,6 +7,11 @@ export default defineConfig({
   fullyParallel: false,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
+  expect: {
+    toHaveScreenshot: {
+      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}{ext}"
+    }
+  },
   use: {
     screenshot: "only-on-failure",
     trace: "retain-on-failure",

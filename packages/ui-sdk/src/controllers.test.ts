@@ -570,6 +570,15 @@ describe("ui-sdk controllers", () => {
 
     expect(root.textContent).toContain("Quote quote-1 is open");
 
+    const acceptButton = root.querySelector<HTMLButtonElement>("[data-action='accept-quote']");
+
+    acceptButton?.removeAttribute("data-id");
+    acceptButton?.click();
+    await flushUpdates();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+    acceptButton?.setAttribute("data-id", "quote-1");
     click(root, "[data-action='accept-quote']");
     await flushUpdates();
 
@@ -658,6 +667,11 @@ describe("ui-sdk controllers", () => {
     await flushUpdates();
 
     const selectButton = root.querySelector<HTMLButtonElement>("[data-action='select-rfq']");
+
+    selectButton?.removeAttribute("data-id");
+    selectButton?.click();
+    expect(root.textContent).not.toContain("Selected RFQ");
+
     selectButton?.setAttribute("data-id", "rfq-missing");
     selectButton?.click();
     expect(root.textContent).toContain("Selected RFQ rfq-missing for quoting.");
@@ -787,6 +801,56 @@ describe("ui-sdk controllers", () => {
     await flushUpdates();
 
     expect(root.textContent).toContain("Demo reset failed.");
+  });
+
+  it("falls back to the global fetch implementation when no fetch override is provided", async () => {
+    const operatorRoot = document.createElement("div");
+    const subscriberRoot = document.createElement("div");
+    const dealerRoot = document.createElement("div");
+    const demoRoot = document.createElement("div");
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ ...demoStatus, mode: "empty" }))
+      .mockResolvedValueOnce(jsonResponse({ ...demoStatus, mode: "empty" }))
+      .mockResolvedValueOnce(jsonResponse({ ...demoStatus, mode: "empty" }))
+      .mockResolvedValueOnce(jsonResponse(demoStatus));
+
+    vi.stubGlobal("fetch", asFetch(fetchImpl));
+
+    try {
+      await mountOperatorConsole({
+        apiBaseUrl: "http://unit.test",
+        location: new URL("http://localhost/"),
+        root: operatorRoot,
+        storage: asStorage(createStorage())
+      });
+      await mountSubscriberTerminal({
+        apiBaseUrl: "http://unit.test",
+        location: new URL("http://localhost/"),
+        root: subscriberRoot,
+        storage: asStorage(createStorage())
+      });
+      await mountDealerWorkbench({
+        apiBaseUrl: "http://unit.test",
+        location: new URL("http://localhost/"),
+        root: dealerRoot,
+        storage: asStorage(createStorage())
+      });
+      await mountDemoOrchestrator({
+        apiBaseUrl: "http://unit.test",
+        root: demoRoot
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(operatorRoot.textContent).toContain("No pair is currently loaded.");
+    expect(subscriberRoot.textContent).toContain(
+      "No pair is currently visible for this subscriber."
+    );
+    expect(dealerRoot.textContent).toContain("No pair is currently visible for this dealer.");
+    expect(demoRoot.textContent).toContain("Demo Orchestrator");
   });
 
   it("auto-loads the operator view when the demo stack is already seeded", async () => {
