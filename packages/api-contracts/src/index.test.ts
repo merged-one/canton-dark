@@ -2,30 +2,33 @@ import { describe, expect, it } from "vitest";
 
 import {
   ContractValidationError,
+  createPairRequestSchema,
   generateOpenApiDocument,
   grantAccessRequestSchema,
+  markSettlementProgressionRequestSchema,
+  openRfqRequestSchema,
+  parseCreatePairRequest,
   parseHealthResponse,
-  parseRegisterPairRequest,
   pausePairRequestSchema,
-  submitDarkOrderRequestSchema,
-  validateVenueResponseSchema
+  rejectRfqRequestSchema,
+  submitQuoteRequestSchema
 } from "./index";
 
 describe("api-contract runtime schemas", () => {
-  it("parses valid contract payloads", () => {
+  it("parses valid request and response payloads", () => {
     expect(
-      parseRegisterPairRequest({
-        mode: "ATSPair",
+      parseCreatePairRequest({
+        mode: "SingleDealerPair",
         operatorId: "operator-1",
-        dealers: ["dealer-alpha"],
+        dealerId: "dealer-alpha",
         jurisdiction: "US",
         rulebookVersion: "v1",
         rulebookSummary: "initial"
       })
     ).toEqual({
-      mode: "ATSPair",
+      mode: "SingleDealerPair",
       operatorId: "operator-1",
-      dealers: ["dealer-alpha"],
+      dealerId: "dealer-alpha",
       jurisdiction: "US",
       rulebookVersion: "v1",
       rulebookSummary: "initial"
@@ -35,18 +38,18 @@ describe("api-contract runtime schemas", () => {
         service: "venue-api",
         generatedAt: "2026-04-02T00:00:00.000Z",
         venue: {
-          title: "ATSPair kernel health",
+          title: "SingleDealerPair health",
           status: "healthy",
           detail: "healthy",
           summary: {
             pairId: "pair-1",
-            mode: "ATSPair",
+            mode: "SingleDealerPair",
             operatorId: "operator-1",
             dealers: ["dealer-alpha"],
             paused: false,
             rulebookVersion: "v1",
-            activeParticipantCount: 2,
-            ledgerFacts: ["Shared RFQ state"],
+            activeParticipantCount: 3,
+            ledgerFacts: ["RFQ sessions"],
             offLedgerFacts: ["Operator analytics"]
           },
           violations: []
@@ -56,18 +59,18 @@ describe("api-contract runtime schemas", () => {
       service: "venue-api",
       generatedAt: "2026-04-02T00:00:00.000Z",
       venue: {
-        title: "ATSPair kernel health",
+        title: "SingleDealerPair health",
         status: "healthy",
         detail: "healthy",
         summary: {
           pairId: "pair-1",
-          mode: "ATSPair",
+          mode: "SingleDealerPair",
           operatorId: "operator-1",
           dealers: ["dealer-alpha"],
           paused: false,
           rulebookVersion: "v1",
-          activeParticipantCount: 2,
-          ledgerFacts: ["Shared RFQ state"],
+          activeParticipantCount: 3,
+          ledgerFacts: ["RFQ sessions"],
           offLedgerFacts: ["Operator analytics"]
         },
         violations: []
@@ -77,9 +80,9 @@ describe("api-contract runtime schemas", () => {
 
   it("throws typed validation errors for invalid payloads", () => {
     expect(() =>
-      parseRegisterPairRequest({
-        mode: "ATSPair",
-        dealers: [],
+      parseCreatePairRequest({
+        mode: "SingleDealerPair",
+        dealerId: "dealer-alpha",
         jurisdiction: "US",
         rulebookVersion: "v1",
         rulebookSummary: "initial"
@@ -90,18 +93,18 @@ describe("api-contract runtime schemas", () => {
         service: "venue-api",
         generatedAt: "2026-04-02T00:00:00.000Z",
         venue: {
-          title: "ATSPair kernel health",
+          title: "SingleDealerPair health",
           status: "invalid",
           detail: "healthy",
           summary: {
             pairId: "pair-1",
-            mode: "ATSPair",
+            mode: "SingleDealerPair",
             operatorId: "operator-1",
             dealers: ["dealer-alpha"],
             paused: false,
             rulebookVersion: "v1",
-            activeParticipantCount: 2,
-            ledgerFacts: ["Shared RFQ state"],
+            activeParticipantCount: 3,
+            ledgerFacts: ["RFQ sessions"],
             offLedgerFacts: ["Operator analytics"]
           },
           violations: []
@@ -110,7 +113,7 @@ describe("api-contract runtime schemas", () => {
     ).toThrow(expect.objectContaining({ path: "$.venue.status" }));
   });
 
-  it("covers optional, scalar, array, and object validation branches", () => {
+  it("covers optional and scalar validation branches", () => {
     expect(
       pausePairRequestSchema.parse({
         state: "active"
@@ -127,11 +130,14 @@ describe("api-contract runtime schemas", () => {
       subjectId: "subscriber-1",
       role: "subscriber"
     });
-    expect(validateVenueResponseSchema.parse({ ok: true, violations: [] })).toEqual({
-      ok: true,
-      violations: []
+    expect(
+      rejectRfqRequestSchema.parse({
+        reason: "manual hold"
+      })
+    ).toEqual({
+      reason: "manual hold"
     });
-    expect(() => submitDarkOrderRequestSchema.parse("bad")).toThrow(
+    expect(() => openRfqRequestSchema.parse("bad")).toThrow(
       new ContractValidationError("$", "expected object")
     );
     expect(() =>
@@ -141,18 +147,47 @@ describe("api-contract runtime schemas", () => {
       })
     ).toThrow(expect.objectContaining({ path: "$.subjectId" }));
     expect(() =>
-      validateVenueResponseSchema.parse({
-        ok: "yes",
-        violations: []
+      markSettlementProgressionRequestSchema.parse({
+        status: "bad"
       })
-    ).toThrow(expect.objectContaining({ path: "$.ok" }));
+    ).toThrow(expect.objectContaining({ path: "$.status" }));
     expect(() =>
-      submitDarkOrderRequestSchema.parse({
+      openRfqRequestSchema.parse({
+        instrumentId: "CUSIP-1",
         side: "buy",
-        quantity: 1,
-        limitPrice: "bad"
+        quantity: "bad"
       })
-    ).toThrow(expect.objectContaining({ path: "$.limitPrice" }));
+    ).toThrow(expect.objectContaining({ path: "$.quantity" }));
+    expect(() =>
+      parseHealthResponse({
+        service: "venue-api",
+        generatedAt: "2026-04-02T00:00:00.000Z",
+        venue: {
+          title: "SingleDealerPair health",
+          status: "healthy",
+          detail: "healthy",
+          summary: {
+            pairId: "pair-1",
+            mode: "SingleDealerPair",
+            operatorId: "operator-1",
+            dealers: ["dealer-alpha"],
+            paused: "no",
+            rulebookVersion: "v1",
+            activeParticipantCount: 3,
+            ledgerFacts: ["RFQ sessions"],
+            offLedgerFacts: ["Operator analytics"]
+          },
+          violations: []
+        }
+      })
+    ).toThrow(expect.objectContaining({ path: "$.venue.summary.paused" }));
+    expect(() =>
+      submitQuoteRequestSchema.parse({
+        price: 1,
+        quantity: 1,
+        expiresAt: 1
+      })
+    ).toThrow(expect.objectContaining({ path: "$.expiresAt" }));
     expect(() =>
       grantAccessRequestSchema.parse({
         subjectId: "subscriber-1",
@@ -160,6 +195,16 @@ describe("api-contract runtime schemas", () => {
         entitlements: "bad"
       })
     ).toThrow(expect.objectContaining({ path: "$.entitlements" }));
+    expect(() =>
+      createPairRequestSchema.parse({
+        mode: "SingleDealerPair",
+        operatorId: "operator-1",
+        dealerId: "dealer-alpha",
+        jurisdiction: "US",
+        rulebookVersion: "v1",
+        rulebookSummary: []
+      })
+    ).toThrow(expect.objectContaining({ path: "$.rulebookSummary" }));
   });
 
   it("generates an OpenAPI document from the published schemas", () => {
@@ -176,18 +221,30 @@ describe("api-contract runtime schemas", () => {
       "/pairs/{pairId}/access",
       "/pairs/{pairId}/pause",
       "/pairs/{pairId}/rfqs",
-      "/pairs/{pairId}/dark-orders"
+      "/pairs/{pairId}/rfqs/{rfqId}/reject",
+      "/pairs/{pairId}/rfqs/{rfqId}/cancel",
+      "/pairs/{pairId}/rfqs/{rfqId}/quotes",
+      "/pairs/{pairId}/quotes/{quoteId}/accept",
+      "/pairs/{pairId}/settlements/{instructionId}/progress",
+      "/pairs/{pairId}/views/operator",
+      "/pairs/{pairId}/views/subscriber",
+      "/pairs/{pairId}/views/dealer-workbench",
+      "/pairs/{pairId}/audit-trail"
     ]);
     expect(Object.keys(document.components.schemas)).toEqual([
-      "RegisterPairRequest",
+      "CreatePairRequest",
       "GrantAccessRequest",
       "PausePairRequest",
-      "SubmitRfqRequest",
-      "SubmitDarkOrderRequest",
-      "PairSummaryView",
+      "OpenRfqRequest",
+      "RejectRfqRequest",
+      "SubmitQuoteRequest",
+      "MarkSettlementProgressionRequest",
+      "OperatorView",
+      "SubscriberView",
+      "DealerWorkbenchView",
+      "AuditTrailView",
       "VenueHealthReadModel",
-      "HealthResponse",
-      "ValidateVenueResponse"
+      "HealthResponse"
     ]);
   });
 });

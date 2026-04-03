@@ -1,0 +1,662 @@
+module CantonDark.Phase1.SingleDealer where
+
+import DA.Assert (assertMsg)
+import CantonDark.Core.Types
+
+data PairContracts = PairContracts with
+  pairCid : ContractId PairInstance
+  pauseCid : ContractId PauseState
+
+data QuoteSubmission = QuoteSubmission with
+  rfqCid : ContractId RFQSession
+  quoteCid : ContractId DealerQuote
+
+data QuoteAcceptance = QuoteAcceptance with
+  rfqCid : ContractId RFQSession
+  quoteCid : ContractId DealerQuote
+  executionTicketCid : ContractId ExecutionTicket
+  settlementInstructionCid : ContractId SettlementInstruction
+
+archiveIfSome : Optional (ContractId t) -> Update ()
+archiveIfSome maybeCid =
+  case maybeCid of
+    None -> pure ()
+    Some cid -> archive cid
+
+assertNonEmpty : Text -> Text -> Update ()
+assertNonEmpty fieldName value =
+  assertMsg (fieldName <> " is required.") (value /= "")
+
+lookupOrFail : Text -> Optional (ContractId t) -> Update (ContractId t)
+lookupOrFail message maybeCid =
+  case maybeCid of
+    None -> abort message
+    Some cid -> pure cid
+
+toApprovalData : OperatorApproval -> OperatorApprovalData
+toApprovalData approval =
+  OperatorApprovalData with
+    approvedAt = approval.approvedAt
+    approvedBy = approval.approvedBy
+    note = approval.note
+    status = approval.status
+
+toAttestationData : RegulatoryAttestation -> RegulatoryAttestationData
+toAttestationData attestation =
+  RegulatoryAttestationData with
+    attestedAt = attestation.attestedAt
+    attestedBy = attestation.attestedBy
+    jurisdiction = attestation.jurisdiction
+    status = attestation.status
+
+toRulebookData : RulebookRelease -> RulebookReleaseData
+toRulebookData rulebook =
+  RulebookReleaseData with
+    effectiveAt = rulebook.effectiveAt
+    publishedBy = rulebook.publishedBy
+    releaseId = rulebook.releaseId
+    summary = rulebook.summary
+    version = rulebook.version
+
+toPauseData : PauseState -> PauseStateData
+toPauseData pauseState =
+  PauseStateData with
+    changedAt = pauseState.changedAt
+    changedBy = pauseState.changedBy
+    reason = pauseState.reason
+    state = pauseState.state
+
+assertPairActive : PairInstance -> Update ()
+assertPairActive pair =
+  assertMsg
+    "Trading commands are unavailable while the pair is paused."
+    (isActivePauseState pair.pauseState)
+
+assertSubscriberGrant : AccessGrant -> Update ()
+assertSubscriberGrant grant = do
+  assertMsg "Only subscriber access grants may open RFQs." (grant.role == SubscriberRole)
+  assertMsg
+    "The subscriber does not hold submit_rfq permission for this pair."
+    (hasGrantEntitlement grant.entitlements grant.revokedAt SubmitRfq)
+
+assertDealerGrant : AccessGrant -> Update ()
+assertDealerGrant grant = do
+  assertMsg "Only dealer access grants may submit quotes." (grant.role == DealerRole)
+  assertMsg
+    "The dealer does not hold respond_quote permission for this pair."
+    (hasGrantEntitlement grant.entitlements grant.revokedAt RespondQuote)
+
+assertAcceptGrant : AccessGrant -> Update ()
+assertAcceptGrant grant = do
+  assertMsg "Only subscriber access grants may accept quotes." (grant.role == SubscriberRole)
+  assertMsg
+    "The actor does not hold accept_quote permission for this pair."
+    (hasGrantEntitlement grant.entitlements grant.revokedAt AcceptQuote)
+
+template OperatorApproval
+  with
+    pairId : Text
+    operator : Party
+    dealer : Party
+    approvedAt : Time
+    approvedBy : Party
+    note : Optional Text
+    status : ApprovalStatus
+  where
+    signatory operator
+    observer dealer
+
+    ensure pairId /= ""
+
+    key (operator, pairId) : (Party, Text)
+    maintainer key._1
+
+    choice InstantiatePair : PairContracts
+      with
+        attestationCid : ContractId RegulatoryAttestation
+        rulebookCid : ContractId RulebookRelease
+      controller operator
+      do
+        attestation <- fetch attestationCid
+        rulebook <- fetch rulebookCid
+        now <- getTime
+        assertMsg
+          "Pairs require explicit operator approval before activation."
+          (status == ApprovalApproved)
+        assertMsg
+          "Pairs require an active regulatory attestation before activation."
+          (attestation.status == AttestationAttested)
+        assertMsg
+          "Pair-scoped source contracts must share the same pair identifier."
+          (attestation.pairId == pairId && rulebook.pairId == pairId)
+        assertMsg
+          "Pair-scoped source contracts must share the same operator."
+          (attestation.operator == operator && rulebook.operator == operator)
+        pauseCid <- create PauseState with
+          pairId
+          operator
+          dealer
+          changedAt = now
+          changedBy = operator
+          reason = None
+          state = PairActive
+        pairCid <- create PairInstance with
+          pairId
+          operator
+          dealer
+          mode = SingleDealerPair
+          operatorApproval = toApprovalData this
+          regulatoryAttestation = toAttestationData attestation
+          rulebookRelease = toRulebookData rulebook
+          pauseState = mkActivePauseState now operator
+          createdAt = now
+          updatedAt = now
+        pure PairContracts with pairCid; pauseCid
+
+template RegulatoryAttestation
+  with
+    pairId : Text
+    operator : Party
+    dealer : Party
+    attestedAt : Time
+    attestedBy : Party
+    jurisdiction : Text
+    status : AttestationStatus
+  where
+    signatory operator
+    observer dealer
+
+    ensure pairId /= "" && jurisdiction /= ""
+
+    key (operator, pairId) : (Party, Text)
+    maintainer key._1
+
+template RulebookRelease
+  with
+    pairId : Text
+    operator : Party
+    dealer : Party
+    effectiveAt : Time
+    publishedBy : Party
+    releaseId : Text
+    summary : Text
+    version : Text
+  where
+    signatory operator
+    observer dealer
+
+    ensure pairId /= "" && releaseId /= "" && summary /= "" && version /= ""
+
+    key (operator, pairId, version) : (Party, Text, Text)
+    maintainer key._1
+
+template PauseState
+  with
+    pairId : Text
+    operator : Party
+    dealer : Party
+    changedAt : Time
+    changedBy : Party
+    reason : Optional Text
+    state : PauseStatus
+  where
+    signatory operator
+    observer dealer
+
+    ensure
+      pairId /= ""
+        && case state of
+          PairActive -> case reason of
+            None -> True
+            Some _ -> False
+          PairPaused -> case reason of
+            None -> False
+            Some pauseReason -> pauseReason /= ""
+
+    key (operator, pairId) : (Party, Text)
+    maintainer key._1
+
+template PairInstance
+  with
+    pairId : Text
+    operator : Party
+    dealer : Party
+    mode : PairMode
+    operatorApproval : OperatorApprovalData
+    regulatoryAttestation : RegulatoryAttestationData
+    rulebookRelease : RulebookReleaseData
+    pauseState : PauseStateData
+    createdAt : Time
+    updatedAt : Time
+  where
+    signatory operator
+    observer dealer
+
+    ensure
+      pairId /= ""
+        && mode == SingleDealerPair
+        && operatorApproval.status == ApprovalApproved
+        && regulatoryAttestation.status == AttestationAttested
+
+    key (operator, pairId) : (Party, Text)
+    maintainer key._1
+
+    choice GrantAccess : ContractId AccessGrant
+      with
+        grantId : Text
+        subject : Party
+        role : ParticipantRole
+        extraEntitlements : [Entitlement]
+        note : Optional Text
+      controller operator
+      do
+        now <- getTime
+        assertNonEmpty "grantId" grantId
+        let entitlements = normalizeEntitlements role extraEntitlements
+        assertMsg
+          "SingleDealerPair venues must bind exactly one dealer."
+          (role /= DealerRole || subject == dealer)
+        create AccessGrant with
+          grantId
+          pairId
+          operator
+          subject
+          role
+          entitlements
+          grantedAt = now
+          grantedBy = operator
+          note
+          revokedAt = None
+          revokedBy = None
+
+    choice Pause : PairContracts
+      with
+        reason : Text
+      controller operator
+      do
+        now <- getTime
+        assertNonEmpty "reason" reason
+        previousPauseCid <- lookupByKey @PauseState (operator, pairId)
+        archiveIfSome previousPauseCid
+        pauseCid <- create PauseState with
+          pairId
+          operator
+          dealer
+          changedAt = now
+          changedBy = operator
+          reason = Some reason
+          state = PairPaused
+        pairCid <- create this with
+          pauseState = mkPausedPauseState now operator reason
+          updatedAt = now
+        pure PairContracts with pairCid; pauseCid
+
+    choice Unpause : PairContracts
+      controller operator
+      do
+        now <- getTime
+        previousPauseCid <- lookupByKey @PauseState (operator, pairId)
+        archiveIfSome previousPauseCid
+        pauseCid <- create PauseState with
+          pairId
+          operator
+          dealer
+          changedAt = now
+          changedBy = operator
+          reason = None
+          state = PairActive
+        pairCid <- create this with
+          pauseState = mkActivePauseState now operator
+          updatedAt = now
+        pure PairContracts with pairCid; pauseCid
+
+template AccessGrant
+  with
+    grantId : Text
+    pairId : Text
+    operator : Party
+    subject : Party
+    role : ParticipantRole
+    entitlements : [Entitlement]
+    grantedAt : Time
+    grantedBy : Party
+    note : Optional Text
+    revokedAt : Optional Time
+    revokedBy : Optional Party
+  where
+    signatory operator
+    observer subject
+
+    ensure grantId /= "" && pairId /= ""
+
+    key (operator, pairId, subject, role) : (Party, Text, Party, ParticipantRole)
+    maintainer key._1
+
+    choice OpenRfq : ContractId RFQSession
+      with
+        rfqId : Text
+        instrumentId : Text
+        side : RFQSide
+        quantity : Decimal
+      controller subject
+      do
+        maybePairCid <- lookupByKey @PairInstance (operator, pairId)
+        pairCid <- lookupOrFail "Pair was not found." maybePairCid
+        pair <- fetch pairCid
+        now <- getTime
+        assertSubscriberGrant this
+        assertPairActive pair
+        assertNonEmpty "rfqId" rfqId
+        assertNonEmpty "instrumentId" instrumentId
+        assertMsg "RFQ quantity must be greater than zero." (quantity > 0.0)
+        create RFQSession with
+          pairId
+          operator
+          dealer = pair.dealer
+          subscriber = subject
+          instrumentId
+          side
+          quantity
+          rfqId
+          createdAt = now
+          updatedAt = now
+          status = RfqOpen
+          acceptedQuoteId = None
+          cancelledAt = None
+          cancelledBy = None
+          rejectedAt = None
+          rejectedBy = None
+          rejectionReason = None
+
+template RFQSession
+  with
+    pairId : Text
+    operator : Party
+    dealer : Party
+    subscriber : Party
+    instrumentId : Text
+    side : RFQSide
+    quantity : Decimal
+    rfqId : Text
+    createdAt : Time
+    updatedAt : Time
+    status : RFQStatus
+    acceptedQuoteId : Optional Text
+    cancelledAt : Optional Time
+    cancelledBy : Optional Party
+    rejectedAt : Optional Time
+    rejectedBy : Optional Party
+    rejectionReason : Optional Text
+  where
+    signatory operator, subscriber
+    observer dealer
+
+    ensure pairId /= "" && rfqId /= "" && instrumentId /= "" && quantity > 0.0
+
+    key (operator, pairId, rfqId) : (Party, Text, Text)
+    maintainer key._1
+
+    choice SubmitQuote : QuoteSubmission
+      with
+        quoteId : Text
+        price : Decimal
+        quotedQuantity : Decimal
+        expiresAt : Time
+      controller dealer
+      do
+        maybePairCid <- lookupByKey @PairInstance (operator, pairId)
+        pairCid <- lookupOrFail "Pair was not found." maybePairCid
+        pair <- fetch pairCid
+        maybeDealerGrantCid <- lookupByKey @AccessGrant (operator, pairId, dealer, DealerRole)
+        dealerGrantCid <- lookupOrFail "Dealer access grant was not found." maybeDealerGrantCid
+        dealerGrant <- fetch dealerGrantCid
+        now <- getTime
+        assertPairActive pair
+        assertDealerGrant dealerGrant
+        assertNonEmpty "quoteId" quoteId
+        assertMsg "Only open RFQs may receive a dealer quote." (status == RfqOpen)
+        assertMsg
+          "Quotes must come from the dealer bound to the pair and RFQ."
+          (pair.dealer == dealer)
+        assertMsg "Quote price must be greater than zero." (price > 0.0)
+        assertMsg
+          "Quote quantity must be greater than zero and cannot exceed the RFQ quantity."
+          (quotedQuantity > 0.0 && quotedQuantity <= quantity)
+        assertMsg
+          "Quote expiry must be later than quote creation time."
+          (expiresAt > now)
+        rfqCid <- create this with
+          updatedAt = now
+          status = RfqQuoted
+        quoteCid <- create DealerQuote with
+          pairId
+          operator
+          rfqId
+          quoteId
+          dealer
+          subscriber
+          price
+          quantity = quotedQuantity
+          createdAt = now
+          expiresAt
+          updatedAt = now
+          status = QuoteOpen
+          acceptedAt = None
+          acceptedBy = None
+        pure QuoteSubmission with rfqCid; quoteCid
+
+    choice Cancel : ContractId RFQSession
+      controller subscriber
+      do
+        now <- getTime
+        let nextRfq =
+              if status == RfqCancelled then
+                this
+              else
+                this with
+                  updatedAt = now
+                  status = RfqCancelled
+                  cancelledAt = Some now
+                  cancelledBy = Some subscriber
+        assertMsg
+          "Only open or quote-expired RFQs may be cancelled."
+          (status == RfqOpen || status == RfqQuoteExpired || status == RfqCancelled)
+        create nextRfq
+
+    choice Reject : ContractId RFQSession
+      with
+        reason : Optional Text
+      controller dealer
+      do
+        now <- getTime
+        let nextRfq =
+              if status == RfqRejected then
+                this
+              else
+                this with
+                  updatedAt = now
+                  status = RfqRejected
+                  rejectedAt = Some now
+                  rejectedBy = Some dealer
+                  rejectionReason = reason
+        assertMsg "Only open RFQs may be rejected." (status == RfqOpen || status == RfqRejected)
+        create nextRfq
+
+template DealerQuote
+  with
+    pairId : Text
+    operator : Party
+    rfqId : Text
+    quoteId : Text
+    dealer : Party
+    subscriber : Party
+    price : Decimal
+    quantity : Decimal
+    createdAt : Time
+    expiresAt : Time
+    updatedAt : Time
+    status : QuoteStatus
+    acceptedAt : Optional Time
+    acceptedBy : Optional Party
+  where
+    signatory operator, dealer
+    observer subscriber
+
+    ensure pairId /= "" && rfqId /= "" && quoteId /= "" && price > 0.0 && quantity > 0.0 && expiresAt > createdAt
+
+    key (operator, pairId, quoteId) : (Party, Text, Text)
+    maintainer key._1
+
+    choice MarkExpired : QuoteSubmission
+      controller dealer
+      do
+        now <- getTime
+        maybeRfqCid <- lookupByKey @RFQSession (operator, pairId, rfqId)
+        rfqCid <- lookupOrFail "RFQ was not found." maybeRfqCid
+        rfq <- fetch rfqCid
+        assertMsg "Quotes expire only at or after their expiry timestamp." (now >= expiresAt)
+        assertMsg "Only open dealer quotes may expire." (status == QuoteOpen || status == QuoteExpired)
+        let nextQuote =
+              if status == QuoteExpired then
+                this
+              else
+                this with
+                  updatedAt = now
+                  status = QuoteExpired
+        let nextRfq =
+              if rfq.status == RfqQuoteExpired then
+                rfq
+              else
+                rfq with
+                  updatedAt = now
+                  status = RfqQuoteExpired
+        nextRfqCid <- create nextRfq
+        nextQuoteCid <- create nextQuote
+        pure QuoteSubmission with rfqCid = nextRfqCid; quoteCid = nextQuoteCid
+
+    choice Accept : QuoteAcceptance
+      with
+        executionId : Text
+        instructionId : Text
+      controller subscriber
+      do
+        maybePairCid <- lookupByKey @PairInstance (operator, pairId)
+        pairCid <- lookupOrFail "Pair was not found." maybePairCid
+        pair <- fetch pairCid
+        maybeSubscriberGrantCid <- lookupByKey @AccessGrant (operator, pairId, subscriber, SubscriberRole)
+        subscriberGrantCid <- lookupOrFail "Subscriber access grant was not found." maybeSubscriberGrantCid
+        subscriberGrant <- fetch subscriberGrantCid
+        maybeRfqCid <- lookupByKey @RFQSession (operator, pairId, rfqId)
+        rfqCid <- lookupOrFail "RFQ was not found." maybeRfqCid
+        rfq <- fetch rfqCid
+        now <- getTime
+        assertPairActive pair
+        assertAcceptGrant subscriberGrant
+        assertNonEmpty "executionId" executionId
+        assertNonEmpty "instructionId" instructionId
+        assertMsg "A dealer quote cannot be accepted twice." (status /= QuoteAccepted && rfq.acceptedQuoteId == None)
+        assertMsg "Only open dealer quotes may be accepted." (status == QuoteOpen)
+        assertMsg "Only quoted RFQs may accept a dealer quote." (rfq.status == RfqQuoted)
+        assertMsg "Dealer quotes must be accepted before expiry." (now < expiresAt)
+        let acceptedRfq =
+              rfq with
+                updatedAt = now
+                status = RfqAccepted
+                acceptedQuoteId = Some quoteId
+        let acceptedQuote =
+              this with
+                updatedAt = now
+                status = QuoteAccepted
+                acceptedAt = Some now
+                acceptedBy = Some subscriber
+        acceptedRfqCid <- create acceptedRfq
+        acceptedQuoteCid <- create acceptedQuote
+        executionTicketCid <- create ExecutionTicket with
+          operator
+          pairId
+          executionId
+          rfqId
+          quoteId
+          dealer
+          subscriber
+          instrumentId = rfq.instrumentId
+          side = rfq.side
+          quantity
+          price
+          acceptedAt = now
+        settlementInstructionCid <- create SettlementInstruction with
+          operator
+          pairId
+          instructionId
+          executionId
+          dealer
+          subscriber
+          status = SettlementPending
+          createdAt = now
+          updatedAt = now
+        pure QuoteAcceptance with
+          rfqCid = acceptedRfqCid
+          quoteCid = acceptedQuoteCid
+          executionTicketCid
+          settlementInstructionCid
+
+template ExecutionTicket
+  with
+    operator : Party
+    pairId : Text
+    executionId : Text
+    rfqId : Text
+    quoteId : Text
+    dealer : Party
+    subscriber : Party
+    instrumentId : Text
+    side : RFQSide
+    quantity : Decimal
+    price : Decimal
+    acceptedAt : Time
+  where
+    signatory operator
+    observer dealer, subscriber
+
+    ensure pairId /= "" && executionId /= "" && instrumentId /= "" && quantity > 0.0 && price > 0.0
+
+    key (operator, pairId, executionId) : (Party, Text, Text)
+    maintainer key._1
+
+template SettlementInstruction
+  with
+    operator : Party
+    pairId : Text
+    instructionId : Text
+    executionId : Text
+    dealer : Party
+    subscriber : Party
+    status : SettlementStatus
+    createdAt : Time
+    updatedAt : Time
+  where
+    signatory operator
+    observer dealer, subscriber
+
+    ensure pairId /= "" && instructionId /= "" && executionId /= ""
+
+    key (operator, pairId, instructionId) : (Party, Text, Text)
+    maintainer key._1
+
+    choice MarkProgression : ContractId SettlementInstruction
+      with
+        nextStatus : SettlementStatus
+      controller operator
+      do
+        now <- getTime
+        let nextInstruction =
+              if status == nextStatus then
+                this
+              else
+                this with
+                  status = nextStatus
+                  updatedAt = now
+        assertMsg
+          "The requested settlement transition is not allowed."
+          (status == nextStatus || canProgressSettlement status nextStatus)
+        create nextInstruction

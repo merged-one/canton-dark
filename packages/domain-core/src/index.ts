@@ -1,15 +1,6 @@
 export type PairMode = "ATSPair" | "SingleDealerPair";
 export type VenueMode = PairMode;
 
-export type FactCategory =
-  | "local-analytics"
-  | "query-cache"
-  | "shared-execution-state"
-  | "shared-rfq-state"
-  | "telemetry-projection"
-  | "ui-state";
-export type FactLocation = "off-ledger" | "on-ledger";
-
 export type ParticipantRole =
   | "auditor"
   | "dealer"
@@ -18,13 +9,12 @@ export type ParticipantRole =
   | "subscriber";
 
 export type Entitlement =
+  | "accept_quote"
   | "approve_pair"
-  | "confirm_settlement"
   | "manage_access"
   | "pause_pair"
-  | "propose_match"
+  | "progress_settlement"
   | "respond_quote"
-  | "submit_dark_order"
   | "submit_rfq"
   | "view_audit"
   | "view_pair";
@@ -66,8 +56,8 @@ export type RulebookRelease = {
 
 export type PairInstance = {
   createdAt: string;
-  dealers: readonly string[];
-  mode: PairMode;
+  dealerId: string;
+  mode: "SingleDealerPair";
   operatorApproval: OperatorApproval;
   operatorId: string;
   pairId: string;
@@ -90,20 +80,40 @@ export type AccessGrant = {
   subjectId: string;
 };
 
-export type RFQ = {
+export type RFQSide = "buy" | "sell";
+
+export type RFQSessionStatus =
+  | "accepted"
+  | "cancelled"
+  | "open"
+  | "quote_expired"
+  | "quoted"
+  | "rejected";
+
+export type RFQSession = {
+  acceptedQuoteId?: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
   createdAt: string;
-  directedDealerIds: readonly string[];
-  expiresAt: string;
+  dealerId: string;
   instrumentId: string;
   pairId: string;
   quantity: number;
-  requesterId: string;
+  rejectedAt?: string;
+  rejectedBy?: string;
+  rejectionReason?: string;
   rfqId: string;
-  side: "buy" | "sell";
-  status: "cancelled" | "executed" | "expired" | "open" | "quoted";
+  side: RFQSide;
+  status: RFQSessionStatus;
+  subscriberId: string;
+  updatedAt: string;
 };
 
-export type Quote = {
+export type DealerQuoteStatus = "accepted" | "expired" | "open";
+
+export type DealerQuote = {
+  acceptedAt?: string;
+  acceptedBy?: string;
   createdAt: string;
   dealerId: string;
   expiresAt: string;
@@ -112,75 +122,65 @@ export type Quote = {
   quantity: number;
   quoteId: string;
   rfqId: string;
-  status: "accepted" | "active" | "expired" | "rejected";
+  status: DealerQuoteStatus;
+  subscriberId: string;
+  updatedAt: string;
 };
 
-export type SettlementStatus = "affirmed" | "failed" | "pending" | "settled";
-
-export type Execution = {
-  buyerId: string;
-  createdAt: string;
+export type ExecutionTicket = {
+  acceptedAt: string;
+  dealerId: string;
   executionId: string;
-  matchProposalId?: string;
+  instrumentId: string;
   pairId: string;
   price: number;
   quantity: number;
-  quoteId?: string;
-  sellerId: string;
-  settlementStatus: SettlementStatus;
-  source: "dark-match" | "rfq";
+  quoteId: string;
+  rfqId: string;
+  side: RFQSide;
+  subscriberId: string;
 };
 
-export type DarkOrder = {
+export type SettlementStatus = "affirmed" | "failed" | "instructed" | "pending" | "settled";
+
+export type SettlementInstruction = {
   createdAt: string;
-  limitPrice: number;
-  orderId: string;
+  executionId: string;
+  instructionId: string;
   pairId: string;
-  participantId: string;
-  quantity: number;
-  side: "buy" | "sell";
-  status: "cancelled" | "executed" | "matched" | "resting";
+  status: SettlementStatus;
+  updatedAt: string;
 };
 
-export type MatchStatus = "approved" | "executed" | "proposed" | "rejected";
-
-export type MatchProposal = {
-  buyOrderId: string;
-  createdAt: string;
+export type AuditRecord = {
+  action: string;
+  actorId: string;
+  at: string;
+  detail: string;
+  entityId?: string;
   pairId: string;
-  proposalId: string;
-  proposedPrice: number;
-  proposedQuantity: number;
-  referencePrice: number;
-  sellOrderId: string;
-  status: MatchStatus;
 };
 
 export type DomainErrorCode =
-  | "DARK_ORDER_REQUIRES_ATS_PAIR"
   | "EMPTY_IDENTIFIER"
-  | "INVALID_DIRECTED_DEALER"
-  | "INVALID_MATCH_PRICE"
-  | "INVALID_MATCH_QUANTITY"
-  | "INVALID_MATCH_SIDES"
-  | "INVALID_ORDER_PRICE"
-  | "INVALID_ORDER_QUANTITY"
   | "INVALID_PAUSE_REASON"
+  | "INVALID_QUOTE_EXPIRY"
   | "INVALID_QUOTE_PRICE"
   | "INVALID_QUOTE_QUANTITY"
-  | "INVALID_REFERENCE_PRICE"
   | "INVALID_RFQ_QUANTITY"
   | "INVALID_RULEBOOK_RELEASE"
   | "INVALID_SETTLEMENT_TRANSITION"
   | "MISSING_ENTITLEMENT"
-  | "MATCH_REQUIRES_ATS_PAIR"
   | "PAIR_APPROVAL_REQUIRED"
   | "PAIR_IS_PAUSED"
   | "PAIR_OPERATOR_REQUIRED"
   | "PAIR_REGULATORY_ATTESTATION_REQUIRED"
+  | "QUOTE_ALREADY_ACCEPTED"
+  | "QUOTE_EXPIRED"
+  | "QUOTE_NOT_OPEN"
   | "RFQ_DEALER_MISMATCH"
-  | "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER"
-  | "ATS_PAIR_REQUIRES_AT_LEAST_ONE_DIRECTED_DEALER";
+  | "RFQ_NOT_OPEN"
+  | "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER";
 
 export class DomainError extends Error {
   readonly code: DomainErrorCode;
@@ -218,8 +218,8 @@ export function assertInvariant(
 
 export type CreatePairInstanceInput = {
   createdAt: string;
-  dealers: readonly string[];
-  mode: PairMode;
+  dealerId: string;
+  mode: "SingleDealerPair";
   operatorApproval: OperatorApproval;
   operatorId: string;
   pairId: string;
@@ -246,20 +246,18 @@ export type SetPairPauseStateInput = {
   state: PauseState["state"];
 };
 
-export type CreateRfqInput = {
+export type CreateRfqSessionInput = {
   accessGrants: readonly AccessGrant[];
   createdAt: string;
-  directedDealerIds: readonly string[];
-  expiresAt: string;
   instrumentId: string;
   pair: PairInstance;
   quantity: number;
-  requesterId: string;
   rfqId: string;
-  side: RFQ["side"];
+  side: RFQSide;
+  subscriberId: string;
 };
 
-export type CreateQuoteInput = {
+export type CreateDealerQuoteInput = {
   accessGrants: readonly AccessGrant[];
   createdAt: string;
   dealerId: string;
@@ -268,106 +266,70 @@ export type CreateQuoteInput = {
   price: number;
   quantity: number;
   quoteId: string;
-  rfq: RFQ;
+  rfq: RFQSession;
 };
 
-export type CreateExecutionFromQuoteInput = {
-  createdAt: string;
-  executionId: string;
-  pair: PairInstance;
-  quote: Quote;
-  rfq: RFQ;
-};
-
-export type CreateDarkOrderInput = {
+export type AcceptDealerQuoteInput = {
+  acceptedAt: string;
+  acceptedBy: string;
   accessGrants: readonly AccessGrant[];
-  createdAt: string;
-  limitPrice: number;
-  orderId: string;
+  executionId: string;
+  instructionId: string;
   pair: PairInstance;
-  participantId: string;
-  quantity: number;
-  side: DarkOrder["side"];
+  quote: DealerQuote;
+  rfq: RFQSession;
 };
 
-export type CreateMatchProposalInput = {
-  buyOrder: DarkOrder;
-  createdAt: string;
-  pair: PairInstance;
-  proposalId: string;
-  proposedPrice: number;
-  proposedQuantity: number;
-  referencePrice: number;
-  sellOrder: DarkOrder;
+export type AcceptDealerQuoteResult = {
+  executionTicket: ExecutionTicket;
+  quote: DealerQuote;
+  rfq: RFQSession;
+  settlementInstruction: SettlementInstruction;
 };
 
-export type RuleViolationCode =
-  | "ATS_PAIR_REQUIRES_AT_LEAST_ONE_DIRECTED_DEALER"
-  | "DISALLOWED_USER_FACING_TERM"
-  | "OPERATOR_ID_REQUIRED"
-  | "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER";
-
-export type RuleViolation = {
-  code: RuleViolationCode;
-  message: string;
+export type RejectRfqSessionInput = {
+  rejectedAt: string;
+  rejectedBy: string;
+  reason?: string;
+  rfq: RFQSession;
 };
-
-export type VenueConfigurationDraft = {
-  dealers: string[];
-  marketingLabel: string;
-  mode: VenueMode;
-  operatorId: string;
-};
-
-export type VenueConfiguration = {
-  dealers: readonly string[];
-  marketingLabel: string;
-  mode: VenueMode;
-  operatorId: string;
-};
-
-export type VenuePolicyDecision = {
-  isValid: boolean;
-  normalized: VenueConfiguration;
-  violations: RuleViolation[];
-};
-
-const disallowedUserFacingTerms = ["exchange", "stock market"] as const;
 
 const entitlementCatalog = [
+  "accept_quote",
   "approve_pair",
-  "confirm_settlement",
   "manage_access",
   "pause_pair",
-  "propose_match",
+  "progress_settlement",
   "respond_quote",
-  "submit_dark_order",
   "submit_rfq",
   "view_audit",
   "view_pair"
 ] as const satisfies readonly Entitlement[];
 
 const roleEntitlementCatalog = {
-  operator: ["approve_pair", "manage_access", "pause_pair", "view_audit", "view_pair"],
-  subscriber: ["submit_dark_order", "submit_rfq", "view_pair"],
+  operator: [
+    "approve_pair",
+    "manage_access",
+    "pause_pair",
+    "progress_settlement",
+    "view_audit",
+    "view_pair"
+  ],
   dealer: ["respond_quote", "view_pair"],
-  settlement_delegate: ["confirm_settlement", "view_pair"],
+  subscriber: ["accept_quote", "submit_rfq", "view_pair"],
+  settlement_delegate: ["progress_settlement", "view_pair"],
   auditor: ["view_audit", "view_pair"]
 } as const satisfies Record<ParticipantRole, readonly Entitlement[]>;
 
 const settlementTransitions: Record<SettlementStatus, readonly SettlementStatus[]> = {
   pending: ["affirmed", "failed"],
-  affirmed: ["failed", "settled"],
-  failed: [],
-  settled: []
+  affirmed: ["instructed", "failed"],
+  instructed: ["settled", "failed"],
+  settled: [],
+  failed: []
 };
 
 const normalizeString = (value: string): string => value.trim();
-
-const normalizeIdentifiers = (values: readonly string[]): string[] =>
-  [...new Set(values.map(normalizeString).filter(Boolean))].sort((left, right) =>
-    left.localeCompare(right)
-  );
 
 const normalizeTimestamp = (value: string, field: string): string =>
   assertNonEmpty(value, "EMPTY_IDENTIFIER", `${field} is required.`, { field });
@@ -375,11 +337,29 @@ const normalizeTimestamp = (value: string, field: string): string =>
 const normalizeOptionalNote = (value?: string): string | undefined => {
   const normalized = value?.trim();
 
-  if (normalized === undefined || normalized === "") {
-    return undefined;
-  }
+  return normalized === undefined || normalized === "" ? undefined : normalized;
+};
+
+const assertNonEmpty = (
+  value: string,
+  code: DomainErrorCode,
+  message: string,
+  context?: Readonly<Record<string, unknown>>
+): string => {
+  const normalized = normalizeString(value);
+
+  assertInvariant(normalized.length > 0, code, message, context);
 
   return normalized;
+};
+
+const assertPositiveNumber = (
+  value: number,
+  code: DomainErrorCode,
+  message: string,
+  context: Readonly<Record<string, unknown>>
+): void => {
+  assertInvariant(Number.isFinite(value) && value > 0, code, message, context);
 };
 
 const isEntitlement = (value: string): value is Entitlement =>
@@ -396,17 +376,17 @@ const normalizeEntitlements = (
 const normalizePauseState = (
   pauseState: PauseState | undefined,
   operatorId: string,
-  createdAt: string
+  changedAt: string
 ): PauseState => {
   if (pauseState === undefined) {
     return {
       state: "active",
-      changedAt: createdAt,
+      changedAt,
       changedBy: operatorId
     };
   }
 
-  const changedAt = normalizeTimestamp(pauseState.changedAt, "pauseState.changedAt");
+  const normalizedChangedAt = normalizeTimestamp(pauseState.changedAt, "pauseState.changedAt");
   const changedBy = assertNonEmpty(
     pauseState.changedBy,
     "EMPTY_IDENTIFIER",
@@ -415,117 +395,42 @@ const normalizePauseState = (
   );
 
   if (pauseState.state === "paused") {
-    const reason = assertNonEmpty(
-      pauseState.reason,
-      "INVALID_PAUSE_REASON",
-      "Paused pairs must include a reason.",
-      { field: "pauseState.reason" }
-    );
-
     return {
       state: "paused",
-      changedAt,
+      changedAt: normalizedChangedAt,
       changedBy,
-      reason
+      reason: assertNonEmpty(
+        pauseState.reason,
+        "INVALID_PAUSE_REASON",
+        "Paused pairs must include a reason.",
+        { field: "pauseState.reason" }
+      )
     };
   }
 
   return {
     state: "active",
-    changedAt,
+    changedAt: normalizedChangedAt,
     changedBy
   };
 };
 
-const assertPositiveNumber = (
-  value: number,
-  code: DomainErrorCode,
-  message: string,
-  context: Readonly<Record<string, unknown>>
-): void => {
-  assertInvariant(Number.isFinite(value) && value > 0, code, message, context);
-};
+const toMillis = (value: string, code: DomainErrorCode, field: string): number => {
+  const millis = Date.parse(value);
 
-const assertNonEmpty = (
-  value: string,
-  code: DomainErrorCode,
-  message: string,
-  context?: Readonly<Record<string, unknown>>
-): string => {
-  const normalized = normalizeString(value);
+  assertInvariant(Number.isFinite(millis), code, `${field} must be a valid ISO timestamp.`, {
+    field,
+    value
+  });
 
-  assertInvariant(normalized.length > 0, code, message, context);
-
-  return normalized;
-};
-
-const assertPairDealers = (mode: PairMode, dealers: readonly string[]): void => {
-  if (mode === "SingleDealerPair") {
-    assertInvariant(
-      dealers.length === 1,
-      "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER",
-      "SingleDealerPair venues must configure exactly one dealer.",
-      { dealerCount: dealers.length }
-    );
-    return;
-  }
-
-  assertInvariant(
-    dealers.length > 0,
-    "ATS_PAIR_REQUIRES_AT_LEAST_ONE_DIRECTED_DEALER",
-    "ATSPair venues must configure at least one directed dealer.",
-    { dealerCount: dealers.length }
-  );
-};
-
-const assertDirectedDealers = (pair: PairInstance, directedDealerIds: readonly string[]): void => {
-  assertPairDealers(pair.mode, directedDealerIds);
-  assertInvariant(
-    directedDealerIds.every((dealerId) => pair.dealers.includes(dealerId)),
-    "INVALID_DIRECTED_DEALER",
-    "Directed dealer routing must stay inside the pair's dealer perimeter.",
-    {
-      directedDealerIds,
-      pairDealers: pair.dealers
-    }
-  );
-
-  if (pair.mode === "SingleDealerPair") {
-    assertInvariant(
-      directedDealerIds[0] === pair.dealers[0],
-      "INVALID_DIRECTED_DEALER",
-      "SingleDealerPair RFQs must target the configured dealer.",
-      {
-        directedDealerIds,
-        pairDealers: pair.dealers
-      }
-    );
-  }
+  return millis;
 };
 
 export const getRoleEntitlements = (role: ParticipantRole): readonly Entitlement[] =>
   roleEntitlementCatalog[role];
 
-export const isUserFacingLabelAllowed = (label: string): boolean => {
-  const normalizedLabel = label.trim().toLowerCase();
-
-  return !disallowedUserFacingTerms.some((term) => normalizedLabel.includes(term));
-};
-
-export const classifyFactLocation = (category: FactCategory): FactLocation => {
-  switch (category) {
-    case "shared-execution-state":
-    case "shared-rfq-state":
-      return "on-ledger";
-    case "local-analytics":
-    case "query-cache":
-    case "telemetry-projection":
-    case "ui-state":
-      return "off-ledger";
-  }
-};
-
 export const createPairInstance = (input: CreatePairInstanceInput): PairInstance => {
+  const createdAt = normalizeTimestamp(input.createdAt, "createdAt");
   const pairId = assertNonEmpty(input.pairId, "EMPTY_IDENTIFIER", "pairId is required.", {
     field: "pairId"
   });
@@ -535,8 +440,12 @@ export const createPairInstance = (input: CreatePairInstanceInput): PairInstance
     "Each pair must identify the owning operator.",
     { field: "operatorId" }
   );
-  const dealers = normalizeIdentifiers(input.dealers);
-  const createdAt = normalizeTimestamp(input.createdAt, "createdAt");
+  const dealerId = assertNonEmpty(
+    input.dealerId,
+    "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER",
+    "SingleDealerPair venues must bind exactly one dealer.",
+    { field: "dealerId" }
+  );
   const approvalNote = normalizeOptionalNote(input.operatorApproval.note);
   const operatorApproval: OperatorApproval = {
     status: input.operatorApproval.status,
@@ -614,13 +523,12 @@ export const createPairInstance = (input: CreatePairInstanceInput): PairInstance
     "Pairs require an active regulatory attestation before activation.",
     { regulatoryAttestation }
   );
-  assertPairDealers(input.mode, dealers);
 
   return {
     pairId,
+    mode: "SingleDealerPair",
     operatorId,
-    mode: input.mode,
-    dealers,
+    dealerId,
     operatorApproval,
     regulatoryAttestation,
     rulebookRelease,
@@ -671,11 +579,13 @@ export const resolveEntitlements = (
   subjectId: string,
   grants: readonly AccessGrant[]
 ): readonly Entitlement[] =>
-  normalizeIdentifiers(
-    grants
-      .filter((grant) => grant.subjectId === subjectId && isGrantActive(grant))
-      .flatMap((grant) => [...grant.entitlements])
-  ).filter(isEntitlement);
+  [
+    ...new Set(
+      grants
+        .filter((grant) => grant.subjectId === subjectId && isGrantActive(grant))
+        .flatMap((grant) => grant.entitlements)
+    )
+  ].sort((left, right) => left.localeCompare(right));
 
 export const hasEntitlement = (
   subjectId: string,
@@ -713,38 +623,32 @@ export const setPairPauseState = (
         }
 });
 
-export const assertTradingAllowed = (pair: PairInstance): void => {
+export const assertPairActive = (pair: PairInstance): void => {
   if (pair.pauseState.state === "paused") {
     throw createDomainError(
       "PAIR_IS_PAUSED",
       "Trading commands are unavailable while the pair is paused.",
-      {
-        pairId: pair.pairId,
-        reason: pair.pauseState.reason
-      }
+      { pairId: pair.pairId, reason: pair.pauseState.reason }
     );
   }
 };
 
-export const createRfq = (input: CreateRfqInput): RFQ => {
-  assertTradingAllowed(input.pair);
-  const requesterId = assertNonEmpty(
-    input.requesterId,
+export const createRfqSession = (input: CreateRfqSessionInput): RFQSession => {
+  assertPairActive(input.pair);
+
+  const subscriberId = assertNonEmpty(
+    input.subscriberId,
     "EMPTY_IDENTIFIER",
-    "requesterId is required.",
-    { field: "requesterId" }
+    "subscriberId is required.",
+    { field: "subscriberId" }
   );
 
   assertInvariant(
-    hasEntitlement(requesterId, input.accessGrants, "submit_rfq"),
+    hasEntitlement(subscriberId, input.accessGrants, "submit_rfq"),
     "MISSING_ENTITLEMENT",
-    "The requester does not hold submit_rfq permission for this pair.",
-    { requesterId, pairId: input.pair.pairId }
+    "The subscriber does not hold submit_rfq permission for this pair.",
+    { pairId: input.pair.pairId, subscriberId }
   );
-
-  const directedDealerIds = normalizeIdentifiers(input.directedDealerIds);
-
-  assertDirectedDealers(input.pair, directedDealerIds);
   assertPositiveNumber(
     input.quantity,
     "INVALID_RFQ_QUANTITY",
@@ -757,8 +661,8 @@ export const createRfq = (input: CreateRfqInput): RFQ => {
       field: "rfqId"
     }),
     pairId: input.pair.pairId,
-    requesterId,
-    directedDealerIds,
+    dealerId: input.pair.dealerId,
+    subscriberId,
     instrumentId: assertNonEmpty(
       input.instrumentId,
       "EMPTY_IDENTIFIER",
@@ -768,13 +672,109 @@ export const createRfq = (input: CreateRfqInput): RFQ => {
     side: input.side,
     quantity: input.quantity,
     createdAt: normalizeTimestamp(input.createdAt, "createdAt"),
-    expiresAt: normalizeTimestamp(input.expiresAt, "expiresAt"),
+    updatedAt: normalizeTimestamp(input.createdAt, "createdAt"),
     status: "open"
   };
 };
 
-export const createQuote = (input: CreateQuoteInput): Quote => {
-  assertTradingAllowed(input.pair);
+export const cancelRfqSession = (
+  rfq: RFQSession,
+  cancelledAt: string,
+  cancelledBy: string
+): RFQSession => {
+  if (rfq.status === "cancelled") {
+    return rfq;
+  }
+
+  assertInvariant(
+    rfq.status === "open" || rfq.status === "quote_expired",
+    "RFQ_NOT_OPEN",
+    "Only open or quote-expired RFQs may be cancelled.",
+    { rfqId: rfq.rfqId, status: rfq.status }
+  );
+
+  return {
+    ...rfq,
+    status: "cancelled",
+    updatedAt: normalizeTimestamp(cancelledAt, "cancelledAt"),
+    cancelledAt: normalizeTimestamp(cancelledAt, "cancelledAt"),
+    cancelledBy: assertNonEmpty(cancelledBy, "EMPTY_IDENTIFIER", "cancelledBy is required.", {
+      field: "cancelledBy"
+    })
+  };
+};
+
+export const rejectRfqSession = (input: RejectRfqSessionInput): RFQSession => {
+  if (input.rfq.status === "rejected") {
+    return input.rfq;
+  }
+
+  assertInvariant(input.rfq.status === "open", "RFQ_NOT_OPEN", "Only open RFQs may be rejected.", {
+    rfqId: input.rfq.rfqId,
+    status: input.rfq.status
+  });
+  assertInvariant(
+    input.rfq.dealerId === normalizeString(input.rejectedBy),
+    "RFQ_DEALER_MISMATCH",
+    "Only the bound dealer may reject this RFQ.",
+    { dealerId: input.rfq.dealerId, rejectedBy: input.rejectedBy }
+  );
+
+  const rejectionReason = normalizeOptionalNote(input.reason);
+
+  return {
+    ...input.rfq,
+    status: "rejected",
+    updatedAt: normalizeTimestamp(input.rejectedAt, "rejectedAt"),
+    rejectedAt: normalizeTimestamp(input.rejectedAt, "rejectedAt"),
+    rejectedBy: assertNonEmpty(input.rejectedBy, "EMPTY_IDENTIFIER", "rejectedBy is required.", {
+      field: "rejectedBy"
+    }),
+    ...(rejectionReason !== undefined ? { rejectionReason } : {})
+  };
+};
+
+export const markRfqQuoted = (rfq: RFQSession, updatedAt: string): RFQSession => {
+  if (rfq.status === "quoted") {
+    return rfq;
+  }
+
+  assertInvariant(
+    rfq.status === "open",
+    "RFQ_NOT_OPEN",
+    "Only open RFQs may receive a dealer quote.",
+    { rfqId: rfq.rfqId, status: rfq.status }
+  );
+
+  return {
+    ...rfq,
+    status: "quoted",
+    updatedAt: normalizeTimestamp(updatedAt, "updatedAt")
+  };
+};
+
+export const markRfqQuoteExpired = (rfq: RFQSession, updatedAt: string): RFQSession => {
+  if (rfq.status === "quote_expired") {
+    return rfq;
+  }
+
+  assertInvariant(
+    rfq.status === "quoted",
+    "RFQ_NOT_OPEN",
+    "Only quoted RFQs may transition into quote_expired.",
+    { rfqId: rfq.rfqId, status: rfq.status }
+  );
+
+  return {
+    ...rfq,
+    status: "quote_expired",
+    updatedAt: normalizeTimestamp(updatedAt, "updatedAt")
+  };
+};
+
+export const createDealerQuote = (input: CreateDealerQuoteInput): DealerQuote => {
+  assertPairActive(input.pair);
+
   const dealerId = assertNonEmpty(input.dealerId, "EMPTY_IDENTIFIER", "dealerId is required.", {
     field: "dealerId"
   });
@@ -786,10 +786,20 @@ export const createQuote = (input: CreateQuoteInput): Quote => {
     { dealerId, pairId: input.pair.pairId }
   );
   assertInvariant(
-    input.rfq.directedDealerIds.includes(dealerId),
+    input.rfq.status === "open",
+    "RFQ_NOT_OPEN",
+    "Quotes may only be submitted against open RFQs.",
+    { rfqId: input.rfq.rfqId, status: input.rfq.status }
+  );
+  assertInvariant(
+    input.rfq.dealerId === dealerId && input.pair.dealerId === dealerId,
     "RFQ_DEALER_MISMATCH",
-    "Quotes must come from one of the RFQ's directed dealers.",
-    { dealerId, directedDealerIds: input.rfq.directedDealerIds }
+    "Quotes must come from the dealer bound to the pair and RFQ.",
+    {
+      dealerId,
+      pairDealerId: input.pair.dealerId,
+      rfqDealerId: input.rfq.dealerId
+    }
   );
   assertPositiveNumber(
     input.price,
@@ -807,220 +817,189 @@ export const createQuote = (input: CreateQuoteInput): Quote => {
     }
   );
 
+  const createdAt = normalizeTimestamp(input.createdAt, "createdAt");
+  const expiresAt = normalizeTimestamp(input.expiresAt, "expiresAt");
+  const createdAtMillis = toMillis(createdAt, "INVALID_QUOTE_EXPIRY", "createdAt");
+  const expiresAtMillis = toMillis(expiresAt, "INVALID_QUOTE_EXPIRY", "expiresAt");
+
+  assertInvariant(
+    expiresAtMillis > createdAtMillis,
+    "INVALID_QUOTE_EXPIRY",
+    "Quote expiry must be later than quote creation time.",
+    { createdAt, expiresAt }
+  );
+
   return {
     quoteId: assertNonEmpty(input.quoteId, "EMPTY_IDENTIFIER", "quoteId is required.", {
       field: "quoteId"
     }),
-    rfqId: input.rfq.rfqId,
     pairId: input.pair.pairId,
+    rfqId: input.rfq.rfqId,
     dealerId,
+    subscriberId: input.rfq.subscriberId,
     price: input.price,
     quantity: input.quantity,
-    createdAt: normalizeTimestamp(input.createdAt, "createdAt"),
-    expiresAt: normalizeTimestamp(input.expiresAt, "expiresAt"),
-    status: "active"
+    createdAt,
+    expiresAt,
+    updatedAt: createdAt,
+    status: "open"
   };
 };
 
-export const createExecutionFromQuote = (input: CreateExecutionFromQuoteInput): Execution => {
-  assertTradingAllowed(input.pair);
+export const expireDealerQuote = (quote: DealerQuote, observedAt: string): DealerQuote => {
+  if (quote.status === "accepted" || quote.status === "expired") {
+    return quote;
+  }
+
+  const observedAtMillis = toMillis(
+    normalizeTimestamp(observedAt, "observedAt"),
+    "INVALID_QUOTE_EXPIRY",
+    "observedAt"
+  );
+  const expiresAtMillis = toMillis(quote.expiresAt, "INVALID_QUOTE_EXPIRY", "expiresAt");
+
+  if (observedAtMillis < expiresAtMillis) {
+    return quote;
+  }
 
   return {
-    executionId: assertNonEmpty(input.executionId, "EMPTY_IDENTIFIER", "executionId is required.", {
-      field: "executionId"
-    }),
-    pairId: input.pair.pairId,
-    source: "rfq",
-    quoteId: input.quote.quoteId,
-    quantity: input.quote.quantity,
-    price: input.quote.price,
-    buyerId: input.rfq.side === "buy" ? input.rfq.requesterId : input.quote.dealerId,
-    sellerId: input.rfq.side === "buy" ? input.quote.dealerId : input.rfq.requesterId,
-    createdAt: normalizeTimestamp(input.createdAt, "createdAt"),
-    settlementStatus: "pending"
+    ...quote,
+    status: "expired",
+    updatedAt: normalizeTimestamp(observedAt, "observedAt")
   };
 };
 
-export const createDarkOrder = (input: CreateDarkOrderInput): DarkOrder => {
-  assertInvariant(
-    input.pair.mode === "ATSPair",
-    "DARK_ORDER_REQUIRES_ATS_PAIR",
-    "Dark orders are only available for ATSPair venues.",
-    { pairId: input.pair.pairId, mode: input.pair.mode }
-  );
-  assertTradingAllowed(input.pair);
-  const participantId = assertNonEmpty(
-    input.participantId,
+export const acceptDealerQuote = (input: AcceptDealerQuoteInput): AcceptDealerQuoteResult => {
+  assertPairActive(input.pair);
+
+  const acceptedBy = assertNonEmpty(
+    input.acceptedBy,
     "EMPTY_IDENTIFIER",
-    "participantId is required.",
-    { field: "participantId" }
+    "acceptedBy is required.",
+    { field: "acceptedBy" }
   );
 
   assertInvariant(
-    hasEntitlement(participantId, input.accessGrants, "submit_dark_order"),
+    hasEntitlement(acceptedBy, input.accessGrants, "accept_quote"),
     "MISSING_ENTITLEMENT",
-    "The participant does not hold submit_dark_order permission for this pair.",
-    { participantId, pairId: input.pair.pairId }
+    "The actor does not hold accept_quote permission for this pair.",
+    { acceptedBy, pairId: input.pair.pairId }
   );
-  assertPositiveNumber(
-    input.quantity,
-    "INVALID_ORDER_QUANTITY",
-    "Dark order quantity must be greater than zero.",
-    { quantity: input.quantity }
+  assertInvariant(
+    input.rfq.subscriberId === acceptedBy,
+    "MISSING_ENTITLEMENT",
+    "Only the RFQ subscriber may accept the quote.",
+    { acceptedBy, subscriberId: input.rfq.subscriberId }
   );
-  assertPositiveNumber(
-    input.limitPrice,
-    "INVALID_ORDER_PRICE",
-    "Dark order limit price must be greater than zero.",
-    { limitPrice: input.limitPrice }
+  assertInvariant(
+    input.quote.status !== "accepted" && input.rfq.acceptedQuoteId === undefined,
+    "QUOTE_ALREADY_ACCEPTED",
+    "A dealer quote cannot be accepted twice.",
+    {
+      quoteId: input.quote.quoteId,
+      acceptedQuoteId: input.rfq.acceptedQuoteId
+    }
+  );
+  assertInvariant(
+    input.quote.status === "open",
+    "QUOTE_NOT_OPEN",
+    "Only open dealer quotes may be accepted.",
+    { quoteId: input.quote.quoteId, status: input.quote.status }
+  );
+  assertInvariant(
+    input.rfq.status === "quoted",
+    "RFQ_NOT_OPEN",
+    "Only quoted RFQs may accept a dealer quote.",
+    { rfqId: input.rfq.rfqId, status: input.rfq.status }
   );
 
+  const acceptedAt = normalizeTimestamp(input.acceptedAt, "acceptedAt");
+  const acceptedAtMillis = toMillis(acceptedAt, "INVALID_QUOTE_EXPIRY", "acceptedAt");
+  const expiresAtMillis = toMillis(input.quote.expiresAt, "INVALID_QUOTE_EXPIRY", "expiresAt");
+
+  assertInvariant(
+    acceptedAtMillis < expiresAtMillis,
+    "QUOTE_EXPIRED",
+    "Dealer quotes must be accepted before expiry.",
+    { acceptedAt, expiresAt: input.quote.expiresAt }
+  );
+
+  const rfq: RFQSession = {
+    ...input.rfq,
+    status: "accepted",
+    acceptedQuoteId: input.quote.quoteId,
+    updatedAt: acceptedAt
+  };
+
+  const quote: DealerQuote = {
+    ...input.quote,
+    status: "accepted",
+    acceptedAt,
+    acceptedBy,
+    updatedAt: acceptedAt
+  };
+
   return {
-    orderId: assertNonEmpty(input.orderId, "EMPTY_IDENTIFIER", "orderId is required.", {
-      field: "orderId"
-    }),
-    pairId: input.pair.pairId,
-    participantId,
-    side: input.side,
-    quantity: input.quantity,
-    limitPrice: input.limitPrice,
-    createdAt: normalizeTimestamp(input.createdAt, "createdAt"),
-    status: "resting"
+    rfq,
+    quote,
+    executionTicket: {
+      executionId: assertNonEmpty(
+        input.executionId,
+        "EMPTY_IDENTIFIER",
+        "executionId is required.",
+        { field: "executionId" }
+      ),
+      pairId: input.pair.pairId,
+      rfqId: input.rfq.rfqId,
+      quoteId: input.quote.quoteId,
+      dealerId: input.quote.dealerId,
+      subscriberId: input.rfq.subscriberId,
+      instrumentId: input.rfq.instrumentId,
+      side: input.rfq.side,
+      quantity: input.quote.quantity,
+      price: input.quote.price,
+      acceptedAt
+    },
+    settlementInstruction: {
+      instructionId: assertNonEmpty(
+        input.instructionId,
+        "EMPTY_IDENTIFIER",
+        "instructionId is required.",
+        { field: "instructionId" }
+      ),
+      pairId: input.pair.pairId,
+      executionId: assertNonEmpty(
+        input.executionId,
+        "EMPTY_IDENTIFIER",
+        "executionId is required.",
+        { field: "executionId" }
+      ),
+      status: "pending",
+      createdAt: acceptedAt,
+      updatedAt: acceptedAt
+    }
   };
 };
 
-export const createMatchProposal = (input: CreateMatchProposalInput): MatchProposal => {
-  assertInvariant(
-    input.pair.mode === "ATSPair",
-    "MATCH_REQUIRES_ATS_PAIR",
-    "Match proposals are only available for ATSPair venues.",
-    { pairId: input.pair.pairId, mode: input.pair.mode }
-  );
-  assertTradingAllowed(input.pair);
-  assertInvariant(
-    input.buyOrder.side === "buy" && input.sellOrder.side === "sell",
-    "INVALID_MATCH_SIDES",
-    "Match proposals require a buy order and a sell order.",
-    {
-      buySide: input.buyOrder.side,
-      sellSide: input.sellOrder.side
-    }
-  );
-  assertPositiveNumber(
-    input.referencePrice,
-    "INVALID_REFERENCE_PRICE",
-    "Reference price must be greater than zero.",
-    { referencePrice: input.referencePrice }
-  );
-  assertPositiveNumber(
-    input.proposedPrice,
-    "INVALID_MATCH_PRICE",
-    "Proposed match price must be greater than zero.",
-    { proposedPrice: input.proposedPrice }
-  );
-  assertInvariant(
-    input.buyOrder.limitPrice >= input.proposedPrice &&
-      input.sellOrder.limitPrice <= input.proposedPrice,
-    "INVALID_MATCH_PRICE",
-    "The proposed match price must respect both order limits.",
-    {
-      buyLimitPrice: input.buyOrder.limitPrice,
-      proposedPrice: input.proposedPrice,
-      sellLimitPrice: input.sellOrder.limitPrice
-    }
-  );
-  assertInvariant(
-    Number.isFinite(input.proposedQuantity) &&
-      input.proposedQuantity > 0 &&
-      input.proposedQuantity <= Math.min(input.buyOrder.quantity, input.sellOrder.quantity),
-    "INVALID_MATCH_QUANTITY",
-    "The proposed match quantity must be greater than zero and fit within both orders.",
-    {
-      buyQuantity: input.buyOrder.quantity,
-      proposedQuantity: input.proposedQuantity,
-      sellQuantity: input.sellOrder.quantity
-    }
-  );
-
-  return {
-    proposalId: assertNonEmpty(input.proposalId, "EMPTY_IDENTIFIER", "proposalId is required.", {
-      field: "proposalId"
-    }),
-    pairId: input.pair.pairId,
-    buyOrderId: input.buyOrder.orderId,
-    sellOrderId: input.sellOrder.orderId,
-    proposedPrice: input.proposedPrice,
-    proposedQuantity: input.proposedQuantity,
-    referencePrice: input.referencePrice,
-    createdAt: normalizeTimestamp(input.createdAt, "createdAt"),
-    status: "proposed"
-  };
-};
-
-export const transitionSettlementStatus = (
-  execution: Execution,
-  nextStatus: SettlementStatus
-): Execution => {
-  if (execution.settlementStatus === nextStatus) {
-    return execution;
+export const progressSettlementInstruction = (
+  instruction: SettlementInstruction,
+  nextStatus: SettlementStatus,
+  updatedAt: string
+): SettlementInstruction => {
+  if (instruction.status === nextStatus) {
+    return instruction;
   }
 
   assertInvariant(
-    settlementTransitions[execution.settlementStatus].includes(nextStatus),
+    settlementTransitions[instruction.status].includes(nextStatus),
     "INVALID_SETTLEMENT_TRANSITION",
     "The requested settlement transition is not allowed.",
-    {
-      from: execution.settlementStatus,
-      to: nextStatus
-    }
+    { from: instruction.status, to: nextStatus }
   );
 
   return {
-    ...execution,
-    settlementStatus: nextStatus
-  };
-};
-
-export const evaluateVenueConfiguration = (draft: VenueConfigurationDraft): VenuePolicyDecision => {
-  const normalized: VenueConfiguration = {
-    mode: draft.mode,
-    operatorId: normalizeString(draft.operatorId),
-    dealers: normalizeIdentifiers(draft.dealers),
-    marketingLabel: normalizeString(draft.marketingLabel)
-  };
-  const violations: RuleViolation[] = [];
-
-  if (!normalized.operatorId) {
-    violations.push({
-      code: "OPERATOR_ID_REQUIRED",
-      message: "Each venue configuration must identify the owning operator."
-    });
-  }
-
-  if (!isUserFacingLabelAllowed(normalized.marketingLabel)) {
-    violations.push({
-      code: "DISALLOWED_USER_FACING_TERM",
-      message: "User-facing labels must avoid the terms 'exchange' and 'stock market'."
-    });
-  }
-
-  if (normalized.mode === "SingleDealerPair" && normalized.dealers.length !== 1) {
-    violations.push({
-      code: "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER",
-      message: "SingleDealerPair venues must configure exactly one dealer."
-    });
-  }
-
-  if (normalized.mode === "ATSPair" && normalized.dealers.length === 0) {
-    violations.push({
-      code: "ATS_PAIR_REQUIRES_AT_LEAST_ONE_DIRECTED_DEALER",
-      message: "ATSPair venues must configure at least one directed dealer."
-    });
-  }
-
-  return {
-    isValid: violations.length === 0,
-    normalized,
-    violations
+    ...instruction,
+    status: nextStatus,
+    updatedAt: normalizeTimestamp(updatedAt, "updatedAt")
   };
 };

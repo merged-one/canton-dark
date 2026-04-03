@@ -7,8 +7,8 @@ import {
   parseReplayFile,
   persona,
   replayScenario,
+  runPhase1DemoScenario,
   runScenario,
-  runTrivialScenario,
   serializeReplayFile
 } from "./index";
 
@@ -69,11 +69,10 @@ describe("sim-harness", () => {
       atMs: 0,
       actor: persona.operator("operator-1"),
       command: {
-        kind: "register_pair",
+        kind: "create_pair",
         alias: "pair",
-        mode: "SingleDealerPair",
         operatorId: "operator-1",
-        dealers: ["dealer-alpha"],
+        dealerId: "dealer-alpha",
         jurisdiction: "US",
         rulebookVersion: "v1",
         rulebookSummary: "initial"
@@ -106,8 +105,8 @@ describe("sim-harness", () => {
     });
   });
 
-  it("runs the trivial scenario through the memory-backed application", async () => {
-    const result = await runTrivialScenario(424242);
+  it("runs the phase 1 demo scenario through the memory-backed application", async () => {
+    const result = await runPhase1DemoScenario(424242);
 
     expect(result.replayCommand).toBe("pnpm test:property:replay --seed 424242");
     expect(result.replay).toEqual({
@@ -119,15 +118,14 @@ describe("sim-harness", () => {
           atMs: 0,
           actor: {
             role: "operator",
-            participantId: "operator-1",
+            participantId: "operator-demo",
             displayName: "Operator"
           },
           command: {
-            kind: "register_pair",
+            kind: "create_pair",
             alias: "pair",
-            mode: "ATSPair",
-            operatorId: "operator-1",
-            dealers: ["dealer-alpha", "dealer-beta"],
+            operatorId: "operator-demo",
+            dealerId: "dealer-alpha",
             jurisdiction: "US",
             rulebookVersion: "v1",
             rulebookSummary: "initial"
@@ -137,8 +135,8 @@ describe("sim-harness", () => {
           atMs: 1000,
           actor: {
             role: "operator",
-            participantId: "operator-1",
-            displayName: "operator-1"
+            participantId: "operator-demo",
+            displayName: "operator-demo"
           },
           command: {
             kind: "grant_access",
@@ -155,14 +153,12 @@ describe("sim-harness", () => {
             displayName: "subscriber-1"
           },
           command: {
-            kind: "submit_rfq",
+            kind: "open_rfq",
             alias: "rfq",
             pairAlias: "pair",
-            directedDealerIds: ["dealer-alpha"],
             instrumentId: "CUSIP-1",
             side: "buy",
-            quantity: 50,
-            expiresAt: "2026-04-02T00:30:00.000Z"
+            quantity: 50
           }
         },
         {
@@ -173,7 +169,7 @@ describe("sim-harness", () => {
             displayName: "dealer-alpha"
           },
           command: {
-            kind: "record_quote",
+            kind: "submit_quote",
             alias: "quote",
             pairAlias: "pair",
             rfqAlias: "rfq",
@@ -185,16 +181,17 @@ describe("sim-harness", () => {
         {
           atMs: 4000,
           actor: {
-            role: "operator",
-            participantId: "operator-1",
-            displayName: "operator-1"
+            role: "subscriber",
+            participantId: "subscriber-1",
+            displayName: "subscriber-1"
           },
           command: {
-            kind: "execute_quote",
-            alias: "execution",
+            kind: "accept_quote",
             pairAlias: "pair",
             rfqAlias: "rfq",
-            quoteAlias: "quote"
+            quoteAlias: "quote",
+            executionAlias: "execution",
+            settlementAlias: "settlement"
           }
         }
       ],
@@ -218,6 +215,11 @@ describe("sim-harness", () => {
           alias: "execution",
           type: "execution",
           id: "execution-0093ci-000001"
+        },
+        {
+          alias: "settlement",
+          type: "settlement",
+          id: "settlement-0093ci-000001"
         }
       ]
     });
@@ -232,11 +234,10 @@ describe("sim-harness", () => {
           atMs: 0,
           actor: persona.operator("operator-1"),
           command: {
-            kind: "register_pair",
+            kind: "create_pair",
             alias: "pair",
-            mode: "SingleDealerPair",
             operatorId: "operator-1",
-            dealers: ["dealer-alpha"],
+            dealerId: "dealer-alpha",
             jurisdiction: "US",
             rulebookVersion: "v1",
             rulebookSummary: "initial"
@@ -256,64 +257,58 @@ describe("sim-harness", () => {
           atMs: 2000,
           actor: persona.subscriber("subscriber-1"),
           command: {
-            kind: "submit_rfq",
+            kind: "open_rfq",
             alias: "rfq",
             pairAlias: "pair-000009-000001",
-            directedDealerIds: ["dealer-alpha"],
             instrumentId: "CUSIP-1",
             side: "buy",
-            quantity: 10,
-            expiresAt: "2026-04-02T00:10:00.000Z"
+            quantity: 5
           }
         },
         {
           atMs: 3000,
           actor: persona.dealer("dealer-alpha"),
           command: {
-            kind: "record_quote",
+            kind: "submit_quote",
             alias: "quote",
             pairAlias: "pair-000009-000001",
             rfqAlias: "rfq-000009-000001",
-            price: 100.5,
-            quantity: 10,
-            expiresAt: "2026-04-02T00:09:00.000Z"
+            price: 99,
+            quantity: 5,
+            expiresAt: "2026-04-02T00:20:00.000Z"
           }
         },
         {
           atMs: 4000,
-          actor: persona.operator("operator-1"),
+          actor: persona.subscriber("subscriber-1"),
           command: {
-            kind: "execute_quote",
-            alias: "execution",
+            kind: "accept_quote",
             pairAlias: "pair-000009-000001",
             rfqAlias: "rfq-000009-000001",
-            quoteAlias: "quote-000009-000001"
+            quoteAlias: "quote-000009-000001",
+            executionAlias: "execution",
+            settlementAlias: "settlement"
+          }
+        },
+        {
+          atMs: 5000,
+          actor: persona.operator("operator-1"),
+          command: {
+            kind: "mark_settlement_progression",
+            pairAlias: "pair-000009-000001",
+            settlementAlias: "settlement-000009-000001",
+            status: "affirmed"
           }
         }
       ]
     });
 
-    expect(result.replay.outputs).toEqual([
-      {
-        alias: "pair",
-        type: "pair",
-        id: "pair-000009-000001"
-      },
-      {
-        alias: "rfq",
-        type: "rfq",
-        id: "rfq-000009-000001"
-      },
-      {
-        alias: "quote",
-        type: "quote",
-        id: "quote-000009-000001"
-      },
-      {
-        alias: "execution",
-        type: "execution",
-        id: "execution-000009-000001"
-      }
+    expect(result.replay.outputs.map((output) => output.type)).toEqual([
+      "pair",
+      "rfq",
+      "quote",
+      "execution",
+      "settlement"
     ]);
   });
 });

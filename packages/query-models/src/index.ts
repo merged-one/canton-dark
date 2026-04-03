@@ -1,17 +1,13 @@
 import {
-  classifyFactLocation,
   isGrantActive,
   resolveEntitlements,
   type AccessGrant,
-  type DarkOrder,
-  type Entitlement,
-  type Execution,
-  type MatchProposal,
+  type AuditRecord,
+  type DealerQuote,
+  type ExecutionTicket,
   type PairInstance,
-  type PairMode,
-  type ParticipantRole,
-  type Quote,
-  type RFQ
+  type SettlementInstruction,
+  type RFQSession
 } from "@canton-dark/domain-core";
 
 export type VenueStatus = "healthy" | "paused" | "rejected";
@@ -19,8 +15,8 @@ export type VenueStatus = "healthy" | "paused" | "rejected";
 export type PairSummaryView = {
   approvalStatus: PairInstance["operatorApproval"]["status"];
   attestationStatus: PairInstance["regulatoryAttestation"]["status"];
-  dealers: readonly string[];
-  mode: PairMode;
+  dealerId: string;
+  mode: PairInstance["mode"];
   operatorId: string;
   pairId: string;
   paused: boolean;
@@ -31,7 +27,7 @@ export type VenueSummary = {
   activeParticipantCount: number;
   dealers: readonly string[];
   ledgerFacts: readonly string[];
-  mode: PairMode;
+  mode: PairInstance["mode"];
   offLedgerFacts: readonly string[];
   operatorId: string;
   pairId: string;
@@ -48,8 +44,8 @@ export type VenueHealthReadModel = {
 };
 
 export type ParticipantAccessItemView = {
-  entitlements: readonly Entitlement[];
-  roles: readonly ParticipantRole[];
+  entitlements: readonly string[];
+  roles: readonly AccessGrant["role"][];
   subjectId: string;
 };
 
@@ -58,81 +54,148 @@ export type ParticipantAccessView = {
   participants: readonly ParticipantAccessItemView[];
 };
 
-export type RFQView = Pick<
-  RFQ,
-  "pairId" | "quantity" | "requesterId" | "rfqId" | "side" | "status"
-> & {
-  dealerCount: number;
-};
-
-export type QuoteView = Pick<
-  Quote,
-  "dealerId" | "pairId" | "price" | "quantity" | "quoteId" | "status"
+export type RFQSessionView = Pick<
+  RFQSession,
+  | "createdAt"
+  | "dealerId"
+  | "instrumentId"
+  | "quantity"
+  | "rfqId"
+  | "side"
+  | "status"
+  | "subscriberId"
 >;
 
-export type ExecutionView = Pick<
-  Execution,
-  | "buyerId"
-  | "executionId"
-  | "pairId"
+export type DealerQuoteView = Pick<
+  DealerQuote,
+  | "createdAt"
+  | "dealerId"
+  | "expiresAt"
   | "price"
   | "quantity"
-  | "sellerId"
-  | "settlementStatus"
-  | "source"
+  | "quoteId"
+  | "rfqId"
+  | "status"
+  | "subscriberId"
 >;
 
-export type DarkOrderView = Pick<
-  DarkOrder,
-  "limitPrice" | "orderId" | "pairId" | "participantId" | "quantity" | "side" | "status"
+export type ExecutionTicketView = ExecutionTicket;
+
+export type SettlementInstructionView = Pick<
+  SettlementInstruction,
+  "createdAt" | "executionId" | "instructionId" | "status" | "updatedAt"
 >;
 
-export type MatchProposalView = Pick<
-  MatchProposal,
-  "pairId" | "proposalId" | "proposedPrice" | "proposedQuantity" | "referencePrice" | "status"
->;
+export type AuditTrailEntryView = AuditRecord;
 
-export type TradingActivityView = {
-  darkOrders: readonly DarkOrderView[];
-  executions: readonly ExecutionView[];
-  matches: readonly MatchProposalView[];
-  pairId: string;
-  quotes: readonly QuoteView[];
-  rfqs: readonly RFQView[];
-};
-
-export type PairDashboardView = {
+export type OperatorView = {
   access: ParticipantAccessView;
-  activity: TradingActivityView;
+  executions: readonly ExecutionTicketView[];
   health: VenueHealthReadModel;
   pair: PairSummaryView;
+  quotes: readonly DealerQuoteView[];
+  rfqs: readonly RFQSessionView[];
+  settlements: readonly SettlementInstructionView[];
 };
 
-const factCatalog = [
-  { category: "shared-rfq-state", label: "Shared RFQ state" },
-  { category: "shared-execution-state", label: "Shared execution state" },
-  { category: "query-cache", label: "Operator query cache" },
-  { category: "local-analytics", label: "Operator analytics" },
-  { category: "telemetry-projection", label: "Telemetry projection" },
-  { category: "ui-state", label: "Transient UI state" }
+export type SubscriberView = {
+  canOpenRfq: boolean;
+  entitlements: readonly string[];
+  executions: readonly ExecutionTicketView[];
+  pair: PairSummaryView;
+  quotes: readonly DealerQuoteView[];
+  rfqs: readonly RFQSessionView[];
+  settlements: readonly SettlementInstructionView[];
+  subscriberId: string;
+};
+
+export type DealerWorkbenchView = {
+  dealerId: string;
+  executions: readonly ExecutionTicketView[];
+  pair: PairSummaryView;
+  quotes: readonly DealerQuoteView[];
+  rfqs: readonly RFQSessionView[];
+};
+
+export type AuditTrailView = {
+  entries: readonly AuditTrailEntryView[];
+  pairId: string;
+};
+
+const onLedgerFacts = [
+  "Operator approvals",
+  "Rulebook releases",
+  "Access grants",
+  "RFQ sessions",
+  "Dealer quotes",
+  "Execution tickets",
+  "Settlement instructions"
 ] as const;
 
-const projectFacts = (location: "off-ledger" | "on-ledger"): string[] =>
-  factCatalog
-    .filter((item) => classifyFactLocation(item.category) === location)
-    .map((item) => item.label);
+const offLedgerFacts = [
+  "Operator query cache",
+  "Operator analytics",
+  "Telemetry projection",
+  "Transient UI state"
+] as const;
 
-const bySubjectId = (left: ParticipantAccessItemView, right: ParticipantAccessItemView) =>
+const sortBySubject = (left: ParticipantAccessItemView, right: ParticipantAccessItemView) =>
   left.subjectId.localeCompare(right.subjectId);
+
+const sortByCreatedAt = <T extends { createdAt: string }>(left: T, right: T) =>
+  left.createdAt === right.createdAt
+    ? JSON.stringify(left).localeCompare(JSON.stringify(right))
+    : left.createdAt.localeCompare(right.createdAt);
+
+const sortByAcceptedAt = (left: ExecutionTicket, right: ExecutionTicket) =>
+  left.acceptedAt === right.acceptedAt
+    ? left.executionId.localeCompare(right.executionId)
+    : left.acceptedAt.localeCompare(right.acceptedAt);
+
+const sortAuditEntries = (left: AuditRecord, right: AuditRecord) =>
+  left.at === right.at ? left.action.localeCompare(right.action) : left.at.localeCompare(right.at);
 
 const uniqueSorted = <T extends string>(values: readonly T[]): T[] =>
   [...new Set(values)].sort((left, right) => left.localeCompare(right));
+
+const projectRfq = (rfq: RFQSession): RFQSessionView => ({
+  rfqId: rfq.rfqId,
+  dealerId: rfq.dealerId,
+  subscriberId: rfq.subscriberId,
+  instrumentId: rfq.instrumentId,
+  side: rfq.side,
+  quantity: rfq.quantity,
+  status: rfq.status,
+  createdAt: rfq.createdAt
+});
+
+const projectQuote = (quote: DealerQuote): DealerQuoteView => ({
+  quoteId: quote.quoteId,
+  rfqId: quote.rfqId,
+  dealerId: quote.dealerId,
+  subscriberId: quote.subscriberId,
+  price: quote.price,
+  quantity: quote.quantity,
+  expiresAt: quote.expiresAt,
+  status: quote.status,
+  createdAt: quote.createdAt
+});
+
+const projectExecution = (execution: ExecutionTicket): ExecutionTicketView => execution;
+
+const projectSettlement = (instruction: SettlementInstruction): SettlementInstructionView => ({
+  instructionId: instruction.instructionId,
+  executionId: instruction.executionId,
+  status: instruction.status,
+  createdAt: instruction.createdAt,
+  updatedAt: instruction.updatedAt
+});
 
 export const projectPairSummary = (pair: PairInstance): PairSummaryView => ({
   pairId: pair.pairId,
   mode: pair.mode,
   operatorId: pair.operatorId,
-  dealers: pair.dealers,
+  dealerId: pair.dealerId,
   paused: pair.pauseState.state === "paused",
   rulebookVersion: pair.rulebookRelease.version,
   approvalStatus: pair.operatorApproval.status,
@@ -159,109 +222,131 @@ export const projectParticipantAccess = (
 
   return {
     pairId,
-    participants: participants.sort(bySubjectId)
+    participants: participants.sort(sortBySubject)
   };
 };
 
-export const projectTradingActivity = (
-  pairId: string,
-  records: {
-    darkOrders?: readonly DarkOrder[];
-    executions?: readonly Execution[];
-    matches?: readonly MatchProposal[];
-    quotes?: readonly Quote[];
-    rfqs?: readonly RFQ[];
-  }
-): TradingActivityView => ({
-  pairId,
-  rfqs: (records.rfqs ?? []).map((rfq) => ({
-    rfqId: rfq.rfqId,
-    pairId: rfq.pairId,
-    requesterId: rfq.requesterId,
-    side: rfq.side,
-    quantity: rfq.quantity,
-    status: rfq.status,
-    dealerCount: rfq.directedDealerIds.length
-  })),
-  quotes: (records.quotes ?? []).map((quote) => ({
-    quoteId: quote.quoteId,
-    pairId: quote.pairId,
-    dealerId: quote.dealerId,
-    price: quote.price,
-    quantity: quote.quantity,
-    status: quote.status
-  })),
-  executions: (records.executions ?? []).map((execution) => ({
-    executionId: execution.executionId,
-    pairId: execution.pairId,
-    buyerId: execution.buyerId,
-    sellerId: execution.sellerId,
-    price: execution.price,
-    quantity: execution.quantity,
-    settlementStatus: execution.settlementStatus,
-    source: execution.source
-  })),
-  darkOrders: (records.darkOrders ?? []).map((order) => ({
-    orderId: order.orderId,
-    pairId: order.pairId,
-    participantId: order.participantId,
-    side: order.side,
-    quantity: order.quantity,
-    limitPrice: order.limitPrice,
-    status: order.status
-  })),
-  matches: (records.matches ?? []).map((match) => ({
-    proposalId: match.proposalId,
-    pairId: match.pairId,
-    proposedPrice: match.proposedPrice,
-    proposedQuantity: match.proposedQuantity,
-    referencePrice: match.referencePrice,
-    status: match.status
-  }))
-});
-
 export const projectVenueHealth = (
   pair: PairInstance,
-  grants: readonly AccessGrant[],
-  violations: readonly string[] = []
+  grants: readonly AccessGrant[]
 ): VenueHealthReadModel => {
-  const access = projectParticipantAccess(pair.pairId, grants);
+  const violations = [
+    ...(pair.operatorApproval.status === "approved" ? [] : ["Operator approval is not active."]),
+    ...(pair.regulatoryAttestation.status === "attested"
+      ? []
+      : ["Regulatory attestation is not active."])
+  ];
   const status: VenueStatus =
     violations.length > 0 ? "rejected" : pair.pauseState.state === "paused" ? "paused" : "healthy";
-  const detail =
-    status === "rejected"
-      ? `${violations.length} venue policy issue(s) require remediation before trading can resume.`
-      : pair.pauseState.state === "paused"
-        ? `Pair paused by ${pair.pauseState.changedBy}: ${pair.pauseState.reason}.`
-        : `Operator ${pair.operatorId} governs ${pair.dealers.length} dealer perimeter(s) and ${access.participants.length} active participant grant(s).`;
 
   return {
-    title: `${pair.mode} kernel health`,
+    title: `${pair.mode} health`,
     status,
-    detail,
+    detail:
+      status === "rejected"
+        ? `${violations.length} venue policy issue(s) require remediation before new trading activity.`
+        : pair.pauseState.state === "paused"
+          ? `Pair paused by ${pair.pauseState.changedBy}: ${pair.pauseState.reason}.`
+          : `Operator ${pair.operatorId} oversees dealer ${pair.dealerId} with ${projectParticipantAccess(pair.pairId, grants).participants.length} active participant grant(s).`,
     summary: {
       pairId: pair.pairId,
       mode: pair.mode,
       operatorId: pair.operatorId,
-      dealers: pair.dealers,
+      dealers: [pair.dealerId],
       paused: pair.pauseState.state === "paused",
       rulebookVersion: pair.rulebookRelease.version,
-      activeParticipantCount: access.participants.length,
-      ledgerFacts: projectFacts("on-ledger"),
-      offLedgerFacts: projectFacts("off-ledger")
+      activeParticipantCount: projectParticipantAccess(pair.pairId, grants).participants.length,
+      ledgerFacts: onLedgerFacts,
+      offLedgerFacts
     },
     violations
   };
 };
 
-export const buildPairDashboardView = (input: {
+export const projectOperatorView = (input: {
+  executions: readonly ExecutionTicket[];
   grants: readonly AccessGrant[];
   pair: PairInstance;
-  records?: Parameters<typeof projectTradingActivity>[1];
-  violations?: readonly string[];
-}): PairDashboardView => ({
+  quotes: readonly DealerQuote[];
+  rfqs: readonly RFQSession[];
+  settlements: readonly SettlementInstruction[];
+}): OperatorView => ({
   pair: projectPairSummary(input.pair),
   access: projectParticipantAccess(input.pair.pairId, input.grants),
-  activity: projectTradingActivity(input.pair.pairId, input.records ?? {}),
-  health: projectVenueHealth(input.pair, input.grants, input.violations)
+  rfqs: [...input.rfqs].sort(sortByCreatedAt).map(projectRfq),
+  quotes: [...input.quotes].sort(sortByCreatedAt).map(projectQuote),
+  executions: [...input.executions].sort(sortByAcceptedAt).map(projectExecution),
+  settlements: [...input.settlements].sort(sortByCreatedAt).map(projectSettlement),
+  health: projectVenueHealth(input.pair, input.grants)
+});
+
+export const projectSubscriberView = (input: {
+  executions: readonly ExecutionTicket[];
+  grants: readonly AccessGrant[];
+  pair: PairInstance;
+  quotes: readonly DealerQuote[];
+  rfqs: readonly RFQSession[];
+  settlements: readonly SettlementInstruction[];
+  subscriberId: string;
+}): SubscriberView => {
+  const entitlements = resolveEntitlements(input.subscriberId, input.grants);
+  const executionIds = new Set(
+    input.executions
+      .filter((execution) => execution.subscriberId === input.subscriberId)
+      .map((execution) => execution.executionId)
+  );
+
+  return {
+    pair: projectPairSummary(input.pair),
+    subscriberId: input.subscriberId,
+    entitlements,
+    canOpenRfq: entitlements.includes("submit_rfq"),
+    rfqs: input.rfqs
+      .filter((rfq) => rfq.subscriberId === input.subscriberId)
+      .sort(sortByCreatedAt)
+      .map(projectRfq),
+    quotes: input.quotes
+      .filter((quote) => quote.subscriberId === input.subscriberId)
+      .sort(sortByCreatedAt)
+      .map(projectQuote),
+    executions: input.executions
+      .filter((execution) => execution.subscriberId === input.subscriberId)
+      .sort(sortByAcceptedAt)
+      .map(projectExecution),
+    settlements: input.settlements
+      .filter((settlement) => executionIds.has(settlement.executionId))
+      .sort(sortByCreatedAt)
+      .map(projectSettlement)
+  };
+};
+
+export const projectDealerWorkbenchView = (input: {
+  dealerId: string;
+  executions: readonly ExecutionTicket[];
+  pair: PairInstance;
+  quotes: readonly DealerQuote[];
+  rfqs: readonly RFQSession[];
+}): DealerWorkbenchView => ({
+  pair: projectPairSummary(input.pair),
+  dealerId: input.dealerId,
+  rfqs: input.rfqs
+    .filter((rfq) => rfq.dealerId === input.dealerId)
+    .sort(sortByCreatedAt)
+    .map(projectRfq),
+  quotes: input.quotes
+    .filter((quote) => quote.dealerId === input.dealerId)
+    .sort(sortByCreatedAt)
+    .map(projectQuote),
+  executions: input.executions
+    .filter((execution) => execution.dealerId === input.dealerId)
+    .sort(sortByAcceptedAt)
+    .map(projectExecution)
+});
+
+export const projectAuditTrail = (
+  pairId: string,
+  entries: readonly AuditRecord[]
+): AuditTrailView => ({
+  pairId,
+  entries: [...entries].sort(sortAuditEntries)
 });

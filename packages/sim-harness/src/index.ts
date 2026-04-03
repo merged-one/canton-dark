@@ -2,7 +2,7 @@ import {
   createMemoryVenueEnvironment,
   type DeterministicClock
 } from "@canton-dark/adapters-memory";
-import type { PairMode, ParticipantRole, RFQ } from "@canton-dark/domain-core";
+import type { ParticipantRole, RFQSide, SettlementStatus } from "@canton-dark/domain-core";
 import { createReplayMetadata } from "@canton-dark/testkit";
 
 export type SeededRandom = {
@@ -17,12 +17,11 @@ export type Persona = {
   role: ParticipantRole;
 };
 
-export type RegisterPairScenarioCommand = {
+export type CreatePairScenarioCommand = {
   alias: string;
-  dealers: readonly string[];
+  dealerId: string;
   jurisdiction: string;
-  kind: "register_pair";
-  mode: PairMode;
+  kind: "create_pair";
   operatorId: string;
   rulebookSummary: string;
   rulebookVersion: string;
@@ -35,41 +34,48 @@ export type GrantAccessScenarioCommand = {
   subjectId: string;
 };
 
-export type SubmitRfqScenarioCommand = {
+export type OpenRfqScenarioCommand = {
   alias: string;
-  directedDealerIds: readonly string[];
-  expiresAt: string;
   instrumentId: string;
-  kind: "submit_rfq";
+  kind: "open_rfq";
   pairAlias: string;
   quantity: number;
-  side: RFQ["side"];
+  side: RFQSide;
 };
 
-export type RecordQuoteScenarioCommand = {
+export type SubmitQuoteScenarioCommand = {
   alias: string;
   expiresAt: string;
-  kind: "record_quote";
+  kind: "submit_quote";
   pairAlias: string;
   price: number;
   quantity: number;
   rfqAlias: string;
 };
 
-export type ExecuteQuoteScenarioCommand = {
-  alias: string;
-  kind: "execute_quote";
+export type AcceptQuoteScenarioCommand = {
+  executionAlias: string;
+  kind: "accept_quote";
   pairAlias: string;
   quoteAlias: string;
   rfqAlias: string;
+  settlementAlias: string;
+};
+
+export type MarkSettlementProgressionScenarioCommand = {
+  kind: "mark_settlement_progression";
+  pairAlias: string;
+  settlementAlias: string;
+  status: SettlementStatus;
 };
 
 export type ScenarioCommand =
-  | ExecuteQuoteScenarioCommand
+  | AcceptQuoteScenarioCommand
+  | CreatePairScenarioCommand
   | GrantAccessScenarioCommand
-  | RecordQuoteScenarioCommand
-  | RegisterPairScenarioCommand
-  | SubmitRfqScenarioCommand;
+  | MarkSettlementProgressionScenarioCommand
+  | OpenRfqScenarioCommand
+  | SubmitQuoteScenarioCommand;
 
 export type ScenarioStep = {
   actor: Persona;
@@ -80,7 +86,7 @@ export type ScenarioStep = {
 export type ScenarioOutput = {
   alias: string;
   id: string;
-  type: "execution" | "pair" | "quote" | "rfq";
+  type: "execution" | "pair" | "quote" | "rfq" | "settlement";
 };
 
 export type ScenarioReplayFile = {
@@ -230,12 +236,11 @@ export const runScenario = async (input: {
       recorder.recordStep(step);
 
       switch (step.command.kind) {
-        case "register_pair": {
-          const pair = await environment.application.registerPair({
+        case "create_pair": {
+          const pair = await environment.application.createPair({
             actorId: step.actor.participantId,
-            mode: step.command.mode,
             operatorId: step.command.operatorId,
-            dealers: step.command.dealers,
+            dealerId: step.command.dealerId,
             jurisdiction: step.command.jurisdiction,
             rulebookVersion: step.command.rulebookVersion,
             rulebookSummary: step.command.rulebookSummary
@@ -257,15 +262,13 @@ export const runScenario = async (input: {
           });
           return;
         }
-        case "submit_rfq": {
-          const rfq = await environment.application.submitRfq({
+        case "open_rfq": {
+          const rfq = await environment.application.openRfq({
             actorId: step.actor.participantId,
             pairId: aliases.get(step.command.pairAlias) ?? step.command.pairAlias,
-            directedDealerIds: step.command.directedDealerIds,
             instrumentId: step.command.instrumentId,
             side: step.command.side,
-            quantity: step.command.quantity,
-            expiresAt: step.command.expiresAt
+            quantity: step.command.quantity
           });
           aliases.set(step.command.alias, rfq.rfqId);
           recorder.recordOutput({
@@ -275,8 +278,8 @@ export const runScenario = async (input: {
           });
           return;
         }
-        case "record_quote": {
-          const quote = await environment.application.recordQuote({
+        case "submit_quote": {
+          const quote = await environment.application.submitQuote({
             actorId: step.actor.participantId,
             pairId: aliases.get(step.command.pairAlias) ?? step.command.pairAlias,
             rfqId: aliases.get(step.command.rfqAlias) ?? step.command.rfqAlias,
@@ -284,26 +287,42 @@ export const runScenario = async (input: {
             quantity: step.command.quantity,
             expiresAt: step.command.expiresAt
           });
-          aliases.set(step.command.alias, quote.quoteId);
+          aliases.set(step.command.alias, quote.quote.quoteId);
           recorder.recordOutput({
             alias: step.command.alias,
             type: "quote",
-            id: quote.quoteId
+            id: quote.quote.quoteId
           });
           return;
         }
-        case "execute_quote": {
-          const execution = await environment.application.executeQuote({
+        case "accept_quote": {
+          const accepted = await environment.application.acceptQuote({
             actorId: step.actor.participantId,
             pairId: aliases.get(step.command.pairAlias) ?? step.command.pairAlias,
             rfqId: aliases.get(step.command.rfqAlias) ?? step.command.rfqAlias,
             quoteId: aliases.get(step.command.quoteAlias) ?? step.command.quoteAlias
           });
-          aliases.set(step.command.alias, execution.executionId);
+          aliases.set(step.command.executionAlias, accepted.executionTicket.executionId);
+          aliases.set(step.command.settlementAlias, accepted.settlementInstruction.instructionId);
           recorder.recordOutput({
-            alias: step.command.alias,
+            alias: step.command.executionAlias,
             type: "execution",
-            id: execution.executionId
+            id: accepted.executionTicket.executionId
+          });
+          recorder.recordOutput({
+            alias: step.command.settlementAlias,
+            type: "settlement",
+            id: accepted.settlementInstruction.instructionId
+          });
+          return;
+        }
+        case "mark_settlement_progression": {
+          await environment.application.markSettlementProgression({
+            actorId: step.actor.participantId,
+            pairId: aliases.get(step.command.pairAlias) ?? step.command.pairAlias,
+            instructionId:
+              aliases.get(step.command.settlementAlias) ?? step.command.settlementAlias,
+            status: step.command.status
           });
         }
       }
@@ -325,19 +344,18 @@ export const replayScenario = async (replay: ScenarioReplayFile): Promise<Scenar
     steps: replay.steps
   });
 
-export const runTrivialScenario = async (seed: number): Promise<ScenarioResult> =>
+export const runPhase1DemoScenario = async (seed: number): Promise<ScenarioResult> =>
   runScenario({
     seed,
     steps: [
       {
         atMs: 0,
-        actor: persona.operator("operator-1", "Operator"),
+        actor: persona.operator("operator-demo", "Operator"),
         command: {
-          kind: "register_pair",
+          kind: "create_pair",
           alias: "pair",
-          mode: "ATSPair",
-          operatorId: "operator-1",
-          dealers: ["dealer-alpha", "dealer-beta"],
+          operatorId: "operator-demo",
+          dealerId: "dealer-alpha",
           jurisdiction: "US",
           rulebookVersion: "v1",
           rulebookSummary: "initial"
@@ -345,7 +363,7 @@ export const runTrivialScenario = async (seed: number): Promise<ScenarioResult> 
       },
       {
         atMs: 1_000,
-        actor: persona.operator("operator-1"),
+        actor: persona.operator("operator-demo"),
         command: {
           kind: "grant_access",
           pairAlias: "pair",
@@ -357,21 +375,19 @@ export const runTrivialScenario = async (seed: number): Promise<ScenarioResult> 
         atMs: 2_000,
         actor: persona.subscriber("subscriber-1"),
         command: {
-          kind: "submit_rfq",
+          kind: "open_rfq",
           alias: "rfq",
           pairAlias: "pair",
-          directedDealerIds: ["dealer-alpha"],
           instrumentId: "CUSIP-1",
           side: "buy",
-          quantity: 50,
-          expiresAt: "2026-04-02T00:30:00.000Z"
+          quantity: 50
         }
       },
       {
         atMs: 3_000,
         actor: persona.dealer("dealer-alpha"),
         command: {
-          kind: "record_quote",
+          kind: "submit_quote",
           alias: "quote",
           pairAlias: "pair",
           rfqAlias: "rfq",
@@ -382,13 +398,14 @@ export const runTrivialScenario = async (seed: number): Promise<ScenarioResult> 
       },
       {
         atMs: 4_000,
-        actor: persona.operator("operator-1"),
+        actor: persona.subscriber("subscriber-1"),
         command: {
-          kind: "execute_quote",
-          alias: "execution",
+          kind: "accept_quote",
           pairAlias: "pair",
           rfqAlias: "rfq",
-          quoteAlias: "quote"
+          quoteAlias: "quote",
+          executionAlias: "execution",
+          settlementAlias: "settlement"
         }
       }
     ]

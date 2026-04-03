@@ -2,58 +2,92 @@ import { describe, expect, it } from "vitest";
 
 import type {
   AccessGrant,
-  DarkOrder,
-  Execution,
-  MatchProposal,
+  AuditRecord,
+  DealerQuote,
+  ExecutionTicket,
   PairInstance,
-  Quote,
-  RFQ
+  RFQSession,
+  SettlementInstruction
 } from "@canton-dark/domain-core";
 
 import {
-  buildVenueHealthReadModel,
-  buildVenueHealthResponse,
   createVenueApplication,
-  type AuditEntry,
-  type LedgerEvent,
-  type ProjectionCollection,
-  type RiskAction,
+  type LedgerPort,
   type VenueApplicationDependencies
 } from "./index";
 
-const startedAt = new Date("2026-04-02T00:00:00.000Z");
+const clone = <T>(value: T): T => structuredClone(value);
 
-const createTestDependencies = (
-  overrides: {
-    riskRejectAction?: RiskAction;
-    riskReason?: string;
-    settlementStatus?: "affirmed" | "pending";
-  } = {}
-) => {
-  let nowIndex = 0;
+const createTestDependencies = () => {
   const ids = new Map<string, number>();
-  const pairStore = new Map<string, PairInstance>();
-  const accessStore = new Map<string, AccessGrant[]>();
-  const rfqStore = new Map<string, RFQ>();
-  const quoteStore = new Map<string, Quote>();
-  const executionStore = new Map<string, Execution>();
-  const darkOrderStore = new Map<string, DarkOrder>();
-  const matchStore = new Map<string, MatchProposal>();
-  const projectionStore = new Map<ProjectionCollection, Map<string, unknown>>([
-    ["pair-summary", new Map()],
-    ["health", new Map()],
-    ["access", new Map()],
-    ["activity", new Map()],
-    ["dashboard", new Map()]
-  ]);
-  const events: LedgerEvent[] = [];
-  const audits: AuditEntry[] = [];
-  const notifications: { detail: string; recipientIds: readonly string[]; subject: string }[] = [];
-  const settlementSubmissions: Execution[] = [];
+  const now = {
+    value: new Date("2026-04-02T00:00:00.000Z")
+  };
+  const pairs = new Map<string, PairInstance>();
+  const accessGrants = new Map<string, AccessGrant[]>();
+  const rfqs = new Map<string, RFQSession>();
+  const quotes = new Map<string, DealerQuote>();
+  const executions = new Map<string, ExecutionTicket>();
+  const settlements = new Map<string, SettlementInstruction>();
+  const audits: AuditRecord[] = [];
+
+  const ledger: LedgerPort = {
+    async getExecutionTicket(executionId) {
+      return clone(executions.get(executionId) ?? null);
+    },
+    async getPair(pairId) {
+      return clone(pairs.get(pairId) ?? null);
+    },
+    async getQuote(quoteId) {
+      return clone(quotes.get(quoteId) ?? null);
+    },
+    async getRfq(rfqId) {
+      return clone(rfqs.get(rfqId) ?? null);
+    },
+    async getSettlementInstruction(instructionId) {
+      return clone(settlements.get(instructionId) ?? null);
+    },
+    async listAccessGrants(pairId) {
+      return clone(accessGrants.get(pairId) ?? []);
+    },
+    async listExecutionTickets(pairId) {
+      return clone([...executions.values()].filter((execution) => execution.pairId === pairId));
+    },
+    async listPairs() {
+      return clone([...pairs.values()]);
+    },
+    async listQuotes(pairId) {
+      return clone([...quotes.values()].filter((quote) => quote.pairId === pairId));
+    },
+    async listRfqs(pairId) {
+      return clone([...rfqs.values()].filter((rfq) => rfq.pairId === pairId));
+    },
+    async listSettlementInstructions(pairId) {
+      return clone([...settlements.values()].filter((settlement) => settlement.pairId === pairId));
+    },
+    async saveAccessGrant(grant) {
+      accessGrants.set(grant.pairId, [...(accessGrants.get(grant.pairId) ?? []), clone(grant)]);
+    },
+    async saveExecutionTicket(execution) {
+      executions.set(execution.executionId, clone(execution));
+    },
+    async savePair(pair) {
+      pairs.set(pair.pairId, clone(pair));
+    },
+    async saveQuote(quote) {
+      quotes.set(quote.quoteId, clone(quote));
+    },
+    async saveRfq(rfq) {
+      rfqs.set(rfq.rfqId, clone(rfq));
+    },
+    async saveSettlementInstruction(instruction) {
+      settlements.set(instruction.instructionId, clone(instruction));
+    }
+  };
 
   const deps: VenueApplicationDependencies = {
     clock: {
-      now: () => new Date(startedAt.getTime() + nowIndex++ * 1_000)
+      now: () => new Date(now.value)
     },
     idGenerator: {
       nextId: (namespace) => {
@@ -64,124 +98,13 @@ const createTestDependencies = (
         return `${namespace}-${next.toString().padStart(6, "0")}`;
       }
     },
-    ledger: {
-      async append(event) {
-        events.push(structuredClone(event));
-      },
-      async getDarkOrder(orderId) {
-        return structuredClone(darkOrderStore.get(orderId) ?? null);
-      },
-      async getPair(pairId) {
-        return structuredClone(pairStore.get(pairId) ?? null);
-      },
-      async getQuote(quoteId) {
-        return structuredClone(quoteStore.get(quoteId) ?? null);
-      },
-      async getRfq(rfqId) {
-        return structuredClone(rfqStore.get(rfqId) ?? null);
-      },
-      async listAccessGrants(pairId) {
-        return structuredClone(accessStore.get(pairId) ?? []);
-      },
-      async listDarkOrders(pairId) {
-        return structuredClone(
-          [...darkOrderStore.values()].filter((order) => order.pairId === pairId)
-        );
-      },
-      async listEvents(pairId) {
-        return structuredClone(
-          events.filter((event) => pairId === undefined || event.pairId === pairId)
-        );
-      },
-      async listExecutions(pairId) {
-        return structuredClone(
-          [...executionStore.values()].filter((execution) => execution.pairId === pairId)
-        );
-      },
-      async listMatchProposals(pairId) {
-        return structuredClone([...matchStore.values()].filter((match) => match.pairId === pairId));
-      },
-      async listQuotes(pairId) {
-        return structuredClone([...quoteStore.values()].filter((quote) => quote.pairId === pairId));
-      },
-      async listRfqs(pairId) {
-        return structuredClone([...rfqStore.values()].filter((rfq) => rfq.pairId === pairId));
-      },
-      async saveAccessGrant(grant) {
-        accessStore.set(grant.pairId, [
-          ...(accessStore.get(grant.pairId) ?? []),
-          structuredClone(grant)
-        ]);
-      },
-      async saveDarkOrder(order) {
-        darkOrderStore.set(order.orderId, structuredClone(order));
-      },
-      async saveExecution(execution) {
-        executionStore.set(execution.executionId, structuredClone(execution));
-      },
-      async saveMatchProposal(proposal) {
-        matchStore.set(proposal.proposalId, structuredClone(proposal));
-      },
-      async savePair(pair) {
-        pairStore.set(pair.pairId, structuredClone(pair));
-      },
-      async saveQuote(quote) {
-        quoteStore.set(quote.quoteId, structuredClone(quote));
-      },
-      async saveRfq(rfq) {
-        rfqStore.set(rfq.rfqId, structuredClone(rfq));
-      }
-    },
-    projections: {
-      async get(collection, key) {
-        return structuredClone(
-          ((projectionStore.get(collection) ?? new Map()).get(key) ?? null) as unknown
-        );
-      },
-      async put(collection, key, value) {
-        const target = projectionStore.get(collection);
-
-        if (target === undefined) {
-          throw new Error(`Unknown projection collection ${collection}.`);
-        }
-
-        target.set(key, structuredClone(value));
-      }
-    },
-    riskControl: {
-      async evaluate(input) {
-        return input.action === overrides.riskRejectAction
-          ? {
-              approved: false,
-              ...(overrides.riskReason !== undefined ? { reason: overrides.riskReason } : {})
-            }
-          : { approved: true };
-      }
-    },
-    settlement: {
-      async submit(execution) {
-        settlementSubmissions.push(structuredClone(execution));
-
-        return overrides.settlementStatus ?? "affirmed";
-      }
-    },
+    ledger,
     auditLog: {
+      async list(pairId) {
+        return clone(audits.filter((entry) => pairId === undefined || entry.pairId === pairId));
+      },
       async record(entry) {
-        audits.push(structuredClone(entry));
-      }
-    },
-    notifications: {
-      async send(message) {
-        notifications.push({
-          detail: message.detail,
-          recipientIds: structuredClone(message.recipientIds),
-          subject: message.subject
-        });
-      }
-    },
-    referencePrices: {
-      async get() {
-        return 100.5;
+        audits.push(clone(entry));
       }
     }
   };
@@ -189,605 +112,711 @@ const createTestDependencies = (
   return {
     app: createVenueApplication(deps),
     state: {
+      accessGrants,
       audits,
-      events,
-      notifications,
-      pairStore,
-      projectionStore,
-      settlementSubmissions
+      executions,
+      ledger,
+      pairs,
+      quotes,
+      rfqs,
+      settlements
+    },
+    clock: {
+      advanceBy(milliseconds: number) {
+        now.value = new Date(now.value.getTime() + milliseconds);
+      },
+      set(next: string) {
+        now.value = new Date(next);
+      }
     }
   };
 };
 
 describe("createVenueApplication", () => {
-  it("runs the memory-friendly lifecycle end to end and writes projections", async () => {
-    const { app, state } = createTestDependencies();
-    const pair = await app.registerPair({
+  it("runs the phase 1 lifecycle end to end and exposes scoped query views", async () => {
+    const { app, state, clock } = createTestDependencies();
+
+    expect(await app.listPairs()).toEqual([]);
+
+    const pair = await app.createPair({
       actorId: "operator-1",
-      mode: "ATSPair",
       operatorId: "operator-1",
-      dealers: ["dealer-beta", "dealer-alpha"],
+      dealerId: "dealer-alpha",
       jurisdiction: "US",
-      rulebookVersion: "v1",
-      rulebookSummary: "initial"
+      pairId: "pair-demo",
+      rulebookReleaseId: "rulebook-demo",
+      rulebookSummary: "initial",
+      rulebookVersion: "v1"
     });
-    const grant = await app.grantAccess({
+    clock.advanceBy(1_000);
+    const subscriberGrant = await app.grantAccess({
       actorId: "operator-1",
       pairId: pair.pairId,
       subjectId: "subscriber-1",
       role: "subscriber",
       note: "subscriber access"
     });
-    const secondGrant = await app.grantAccess({
-      actorId: "operator-1",
-      pairId: pair.pairId,
-      subjectId: "subscriber-2",
-      role: "subscriber"
-    });
+    clock.advanceBy(1_000);
     const pausedPair = await app.pausePair({
       actorId: "operator-1",
       pairId: pair.pairId,
       state: "paused",
-      reason: "supervisory review"
+      reason: "manual review"
     });
+    clock.advanceBy(1_000);
     const activePair = await app.pausePair({
       actorId: "operator-1",
       pairId: pair.pairId,
       state: "active"
     });
-    const rfq = await app.submitRfq({
+    clock.advanceBy(1_000);
+    const rfq = await app.openRfq({
       actorId: "subscriber-1",
       pairId: pair.pairId,
-      directedDealerIds: ["dealer-alpha"],
       instrumentId: "CUSIP-1",
       side: "buy",
-      quantity: 150,
-      expiresAt: "2026-04-02T00:30:00.000Z"
+      quantity: 25
     });
-    const quote = await app.recordQuote({
+    clock.advanceBy(1_000);
+    const quoted = await app.submitQuote({
       actorId: "dealer-alpha",
       pairId: pair.pairId,
       rfqId: rfq.rfqId,
-      price: 101.25,
-      quantity: 150,
+      price: 100.5,
+      quantity: 25,
       expiresAt: "2026-04-02T00:20:00.000Z"
     });
-    const execution = await app.executeQuote({
-      actorId: "operator-1",
-      pairId: pair.pairId,
-      rfqId: rfq.rfqId,
-      quoteId: quote.quoteId
-    });
-    const buyOrder = await app.submitDarkOrder({
+    clock.advanceBy(1_000);
+    const accepted = await app.acceptQuote({
       actorId: "subscriber-1",
       pairId: pair.pairId,
-      side: "buy",
-      quantity: 40,
-      limitPrice: 101
+      rfqId: rfq.rfqId,
+      quoteId: quoted.quote.quoteId
     });
-    const sellOrder = await app.submitDarkOrder({
-      actorId: "subscriber-2",
-      pairId: pair.pairId,
-      side: "sell",
-      quantity: 40,
-      limitPrice: 100
-    });
-    const match = await app.proposeMatch({
+    clock.advanceBy(1_000);
+    const unchangedSettlement = await app.markSettlementProgression({
       actorId: "operator-1",
       pairId: pair.pairId,
-      instrumentId: "CUSIP-1",
-      buyOrderId: buyOrder.orderId,
-      sellOrderId: sellOrder.orderId,
-      proposedPrice: 100.5,
-      proposedQuantity: 40
+      instructionId: accepted.settlementInstruction.instructionId,
+      status: "pending"
+    });
+    clock.advanceBy(1_000);
+    const affirmedSettlement = await app.markSettlementProgression({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      instructionId: accepted.settlementInstruction.instructionId,
+      status: "affirmed"
     });
 
-    expect(pair.dealers).toEqual(["dealer-alpha", "dealer-beta"]);
-    expect(grant.note).toBe("subscriber access");
-    expect(secondGrant.entitlements).toEqual(["submit_dark_order", "submit_rfq", "view_pair"]);
+    expect(pair).toEqual({
+      pairId: "pair-demo",
+      mode: "SingleDealerPair",
+      operatorId: "operator-1",
+      dealerId: "dealer-alpha",
+      createdAt: "2026-04-02T00:00:00.000Z",
+      updatedAt: "2026-04-02T00:00:00.000Z",
+      operatorApproval: {
+        status: "approved",
+        approvedAt: "2026-04-02T00:00:00.000Z",
+        approvedBy: "operator-1"
+      },
+      regulatoryAttestation: {
+        status: "attested",
+        attestedAt: "2026-04-02T00:00:00.000Z",
+        attestedBy: "operator-1",
+        jurisdiction: "US"
+      },
+      rulebookRelease: {
+        releaseId: "rulebook-demo",
+        version: "v1",
+        effectiveAt: "2026-04-02T00:00:00.000Z",
+        publishedBy: "operator-1",
+        summary: "initial"
+      },
+      pauseState: {
+        state: "active",
+        changedAt: "2026-04-02T00:00:00.000Z",
+        changedBy: "operator-1"
+      }
+    });
+    expect(subscriberGrant.note).toBe("subscriber access");
     expect(pausedPair.pauseState).toEqual({
       state: "paused",
-      changedAt: "2026-04-02T00:00:09.000Z",
+      changedAt: "2026-04-02T00:00:02.000Z",
       changedBy: "operator-1",
-      reason: "supervisory review"
+      reason: "manual review"
     });
     expect(activePair.pauseState).toEqual({
       state: "active",
-      changedAt: "2026-04-02T00:00:11.000Z",
+      changedAt: "2026-04-02T00:00:03.000Z",
       changedBy: "operator-1"
     });
-    expect(execution.settlementStatus).toBe("affirmed");
-    expect(match.referencePrice).toBe(100.5);
-    expect(state.events.map((event) => event.type)).toEqual([
-      "pair.registered",
-      "access.granted",
-      "access.granted",
-      "access.granted",
-      "access.granted",
-      "access.granted",
-      "pair.pause-state.updated",
-      "pair.pause-state.updated",
-      "rfq.submitted",
-      "quote.recorded",
-      "execution.recorded",
-      "dark-order.submitted",
-      "dark-order.submitted",
-      "match.proposed"
-    ]);
-    expect(state.audits.map((entry) => entry.action)).toEqual([
-      "register_pair",
-      "grant_access",
-      "grant_access",
-      "pause_pair",
-      "pause_pair",
-      "submit_rfq",
-      "record_quote",
-      "execute_quote",
-      "submit_dark_order",
-      "submit_dark_order",
-      "propose_match"
-    ]);
-    expect(state.notifications).toEqual([
-      {
-        subject: "Pair registered",
-        detail: "pair-000001 is active under operator operator-1.",
-        recipientIds: ["dealer-alpha", "dealer-beta", "operator-1"]
+    expect(quoted.rfq.status).toBe("quoted");
+    expect(quoted.quote.status).toBe("open");
+    expect(accepted.executionTicket.price).toBe(100.5);
+    expect(unchangedSettlement.status).toBe("pending");
+    expect(affirmedSettlement.status).toBe("affirmed");
+    expect((await app.listPairs()).map((item) => item.pairId)).toEqual(["pair-demo"]);
+
+    expect(await app.getVenueHealth(pair.pairId)).toEqual({
+      title: "SingleDealerPair health",
+      status: "healthy",
+      detail:
+        "Operator operator-1 oversees dealer dealer-alpha with 3 active participant grant(s).",
+      summary: {
+        pairId: "pair-demo",
+        mode: "SingleDealerPair",
+        operatorId: "operator-1",
+        dealers: ["dealer-alpha"],
+        paused: false,
+        rulebookVersion: "v1",
+        activeParticipantCount: 3,
+        ledgerFacts: [
+          "Operator approvals",
+          "Rulebook releases",
+          "Access grants",
+          "RFQ sessions",
+          "Dealer quotes",
+          "Execution tickets",
+          "Settlement instructions"
+        ],
+        offLedgerFacts: [
+          "Operator query cache",
+          "Operator analytics",
+          "Telemetry projection",
+          "Transient UI state"
+        ]
       },
-      {
-        subject: "Access granted",
-        detail: "subscriber-1 now holds subscriber access for pair-000001.",
-        recipientIds: ["subscriber-1"]
-      },
-      {
-        subject: "Access granted",
-        detail: "subscriber-2 now holds subscriber access for pair-000001.",
-        recipientIds: ["subscriber-2"]
-      },
-      {
-        subject: "Pair pause state updated",
-        detail: "pair-000001 paused by operator-1.",
-        recipientIds: ["dealer-alpha", "dealer-beta", "operator-1", "subscriber-1", "subscriber-2"]
-      },
-      {
-        subject: "Pair pause state updated",
-        detail: "pair-000001 reactivated by operator-1.",
-        recipientIds: ["dealer-alpha", "dealer-beta", "operator-1", "subscriber-1", "subscriber-2"]
-      },
-      {
-        subject: "RFQ submitted",
-        detail: `RFQ ${rfq.rfqId} requires dealer response.`,
-        recipientIds: ["dealer-alpha"]
-      },
-      {
-        subject: "Quote recorded",
-        detail: `Quote ${quote.quoteId} is available for RFQ ${rfq.rfqId}.`,
-        recipientIds: ["subscriber-1"]
-      },
-      {
-        subject: "Execution recorded",
-        detail: `Execution ${execution.executionId} completed at 101.25.`,
-        recipientIds: ["subscriber-1", "dealer-alpha"]
-      }
-    ]);
-    expect(state.settlementSubmissions).toEqual([
-      {
-        executionId: execution.executionId,
-        pairId: pair.pairId,
-        source: "rfq",
-        quoteId: quote.quoteId,
-        quantity: 150,
-        price: 101.25,
-        buyerId: "subscriber-1",
-        sellerId: "dealer-alpha",
-        createdAt: execution.createdAt,
-        settlementStatus: "pending"
-      }
-    ]);
-    await expect(app.getPairSummary(pair.pairId)).resolves.toEqual({
-      pairId: pair.pairId,
-      mode: "ATSPair",
-      operatorId: "operator-1",
-      dealers: ["dealer-alpha", "dealer-beta"],
-      paused: false,
-      rulebookVersion: "v1",
-      approvalStatus: "approved",
-      attestationStatus: "attested"
+      violations: []
     });
-    await expect(app.getTradingActivity(pair.pairId)).resolves.toEqual({
-      pairId: pair.pairId,
+    const health = await app.getVenueHealth(pair.pairId);
+
+    if (health === null) {
+      throw new Error("Expected health view for existing pair.");
+    }
+
+    expect(await app.getOperatorView(pair.pairId)).toEqual({
+      pair: {
+        pairId: "pair-demo",
+        mode: "SingleDealerPair",
+        operatorId: "operator-1",
+        dealerId: "dealer-alpha",
+        paused: false,
+        rulebookVersion: "v1",
+        approvalStatus: "approved",
+        attestationStatus: "attested"
+      },
+      access: {
+        pairId: "pair-demo",
+        participants: [
+          {
+            subjectId: "dealer-alpha",
+            roles: ["dealer"],
+            entitlements: ["respond_quote", "view_pair"]
+          },
+          {
+            subjectId: "operator-1",
+            roles: ["operator"],
+            entitlements: [
+              "approve_pair",
+              "manage_access",
+              "pause_pair",
+              "progress_settlement",
+              "view_audit",
+              "view_pair"
+            ]
+          },
+          {
+            subjectId: "subscriber-1",
+            roles: ["subscriber"],
+            entitlements: ["accept_quote", "submit_rfq", "view_pair"]
+          }
+        ]
+      },
       rfqs: [
         {
           rfqId: rfq.rfqId,
-          pairId: pair.pairId,
-          requesterId: "subscriber-1",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-1",
           side: "buy",
-          quantity: 150,
-          status: "open",
-          dealerCount: 1
+          quantity: 25,
+          status: "accepted",
+          createdAt: "2026-04-02T00:00:04.000Z"
         }
       ],
       quotes: [
         {
-          quoteId: quote.quoteId,
-          pairId: pair.pairId,
+          quoteId: quoted.quote.quoteId,
+          rfqId: rfq.rfqId,
           dealerId: "dealer-alpha",
-          price: 101.25,
-          quantity: 150,
-          status: "active"
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 25,
+          expiresAt: "2026-04-02T00:20:00.000Z",
+          status: "accepted",
+          createdAt: "2026-04-02T00:00:05.000Z"
         }
       ],
       executions: [
         {
-          executionId: execution.executionId,
-          pairId: pair.pairId,
-          buyerId: "subscriber-1",
-          sellerId: "dealer-alpha",
-          price: 101.25,
-          quantity: 150,
-          settlementStatus: "affirmed",
-          source: "rfq"
-        }
-      ],
-      darkOrders: [
-        {
-          orderId: buyOrder.orderId,
-          pairId: pair.pairId,
-          participantId: "subscriber-1",
+          executionId: accepted.executionTicket.executionId,
+          pairId: "pair-demo",
+          rfqId: rfq.rfqId,
+          quoteId: quoted.quote.quoteId,
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-1",
           side: "buy",
-          quantity: 40,
-          limitPrice: 101,
-          status: "resting"
-        },
-        {
-          orderId: sellOrder.orderId,
-          pairId: pair.pairId,
-          participantId: "subscriber-2",
-          side: "sell",
-          quantity: 40,
-          limitPrice: 100,
-          status: "resting"
+          quantity: 25,
+          price: 100.5,
+          acceptedAt: "2026-04-02T00:00:06.000Z"
         }
       ],
-      matches: [
+      settlements: [
         {
-          proposalId: match.proposalId,
-          pairId: pair.pairId,
-          proposedPrice: 100.5,
-          proposedQuantity: 40,
-          referencePrice: 100.5,
-          status: "proposed"
+          instructionId: accepted.settlementInstruction.instructionId,
+          executionId: accepted.executionTicket.executionId,
+          status: "affirmed",
+          createdAt: "2026-04-02T00:00:06.000Z",
+          updatedAt: "2026-04-02T00:00:08.000Z"
+        }
+      ],
+      health
+    });
+    expect(await app.getSubscriberView(pair.pairId, "subscriber-1")).toEqual({
+      pair: {
+        pairId: "pair-demo",
+        mode: "SingleDealerPair",
+        operatorId: "operator-1",
+        dealerId: "dealer-alpha",
+        paused: false,
+        rulebookVersion: "v1",
+        approvalStatus: "approved",
+        attestationStatus: "attested"
+      },
+      subscriberId: "subscriber-1",
+      entitlements: ["accept_quote", "submit_rfq", "view_pair"],
+      canOpenRfq: true,
+      rfqs: [
+        {
+          rfqId: rfq.rfqId,
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-1",
+          side: "buy",
+          quantity: 25,
+          status: "accepted",
+          createdAt: "2026-04-02T00:00:04.000Z"
+        }
+      ],
+      quotes: [
+        {
+          quoteId: quoted.quote.quoteId,
+          rfqId: rfq.rfqId,
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 25,
+          expiresAt: "2026-04-02T00:20:00.000Z",
+          status: "accepted",
+          createdAt: "2026-04-02T00:00:05.000Z"
+        }
+      ],
+      executions: [accepted.executionTicket],
+      settlements: [
+        {
+          instructionId: accepted.settlementInstruction.instructionId,
+          executionId: accepted.executionTicket.executionId,
+          status: "affirmed",
+          createdAt: "2026-04-02T00:00:06.000Z",
+          updatedAt: "2026-04-02T00:00:08.000Z"
         }
       ]
     });
-    await expect(app.getVenueHealth(pair.pairId)).resolves.toEqual({
-      title: "ATSPair kernel health",
-      status: "healthy",
-      detail:
-        "Operator operator-1 governs 2 dealer perimeter(s) and 5 active participant grant(s).",
-      summary: {
-        pairId: pair.pairId,
-        mode: "ATSPair",
-        operatorId: "operator-1",
-        dealers: ["dealer-alpha", "dealer-beta"],
-        paused: false,
-        rulebookVersion: "v1",
-        activeParticipantCount: 5,
-        ledgerFacts: ["Shared RFQ state", "Shared execution state"],
-        offLedgerFacts: [
-          "Operator query cache",
-          "Operator analytics",
-          "Telemetry projection",
-          "Transient UI state"
-        ]
-      },
-      violations: []
-    });
-    await expect(app.getPairDashboard(pair.pairId)).resolves.toEqual(
-      expect.objectContaining({
-        pair: await app.getPairSummary(pair.pairId),
-        activity: await app.getTradingActivity(pair.pairId),
-        health: await app.getVenueHealth(pair.pairId)
-      })
-    );
-    await expect(app.getPairDashboard("missing")).resolves.toBeNull();
-    expect(state.pairStore.get(pair.pairId)).toBeDefined();
-    expect(state.projectionStore.get("dashboard")?.get(pair.pairId)).toBeDefined();
-  });
-
-  it("rejects unauthorized and missing workflows", async () => {
-    const { app } = createTestDependencies({ settlementStatus: "pending" });
-    const pair = await app.registerPair({
-      actorId: "operator-1",
-      mode: "SingleDealerPair",
-      operatorId: "operator-1",
-      dealers: ["dealer-alpha"],
-      jurisdiction: "US",
-      rulebookVersion: "v1",
-      rulebookSummary: "initial"
-    });
-
-    await expect(
-      app.pausePair({
-        actorId: "dealer-alpha",
-        pairId: pair.pairId,
-        state: "paused",
-        reason: "not allowed"
-      })
-    ).rejects.toThrow("missing pause_pair permission");
-    await expect(
-      app.recordQuote({
-        actorId: "dealer-alpha",
-        pairId: pair.pairId,
-        rfqId: "missing",
-        price: 100,
-        quantity: 10,
-        expiresAt: "2026-04-02T00:05:00.000Z"
-      })
-    ).rejects.toThrow("RFQ missing was not found.");
-    await expect(
-      app.executeQuote({
-        actorId: "operator-1",
-        pairId: pair.pairId,
-        rfqId: "missing",
-        quoteId: "missing"
-      })
-    ).rejects.toThrow("RFQ missing was not found.");
-    await expect(
-      app.proposeMatch({
-        actorId: "operator-1",
-        pairId: pair.pairId,
-        instrumentId: "CUSIP-1",
-        buyOrderId: "buy-1",
-        sellOrderId: "sell-1",
-        proposedPrice: 100,
-        proposedQuantity: 10
-      })
-    ).rejects.toThrow("Dark order buy-1 was not found.");
-    await expect(
-      app.proposeMatch({
-        actorId: "operator-1",
-        pairId: "missing",
-        instrumentId: "CUSIP-1",
-        buyOrderId: "buy-1",
-        sellOrderId: "sell-1",
-        proposedPrice: 100,
-        proposedQuantity: 10
-      })
-    ).rejects.toThrow("Pair missing was not found.");
-  });
-
-  it("surfaces risk-control rejections", async () => {
-    const { app } = createTestDependencies({ riskRejectAction: "register_pair" });
-
-    await expect(
-      app.registerPair({
-        actorId: "operator-1",
+    expect(await app.getDealerWorkbenchView(pair.pairId, "dealer-alpha")).toEqual({
+      pair: {
+        pairId: "pair-demo",
         mode: "SingleDealerPair",
         operatorId: "operator-1",
-        dealers: ["dealer-alpha"],
-        jurisdiction: "US",
+        dealerId: "dealer-alpha",
+        paused: false,
         rulebookVersion: "v1",
-        rulebookSummary: "initial"
-      })
-    ).rejects.toThrow("register_pair was rejected by risk controls.");
-
-    const explicitRisk = createTestDependencies({
-      riskRejectAction: "grant_access",
-      riskReason: "manual supervisory rejection"
+        approvalStatus: "approved",
+        attestationStatus: "attested"
+      },
+      dealerId: "dealer-alpha",
+      rfqs: [
+        {
+          rfqId: rfq.rfqId,
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-1",
+          side: "buy",
+          quantity: 25,
+          status: "accepted",
+          createdAt: "2026-04-02T00:00:04.000Z"
+        }
+      ],
+      quotes: [
+        {
+          quoteId: quoted.quote.quoteId,
+          rfqId: rfq.rfqId,
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 25,
+          expiresAt: "2026-04-02T00:20:00.000Z",
+          status: "accepted",
+          createdAt: "2026-04-02T00:00:05.000Z"
+        }
+      ],
+      executions: [accepted.executionTicket]
     });
-    const pair = await explicitRisk.app.registerPair({
-      actorId: "operator-1",
-      mode: "SingleDealerPair",
-      operatorId: "operator-1",
-      dealers: ["dealer-alpha"],
-      jurisdiction: "US",
-      rulebookVersion: "v1",
-      rulebookSummary: "initial"
-    });
+    const auditTrail = await app.getAuditTrail(pair.pairId);
 
-    await expect(
-      explicitRisk.app.grantAccess({
-        actorId: "operator-1",
-        pairId: pair.pairId,
-        subjectId: "subscriber-1",
-        role: "subscriber"
-      })
-    ).rejects.toThrow("manual supervisory rejection");
+    expect(auditTrail?.pairId).toBe("pair-demo");
+    expect(auditTrail?.entries.map((entry) => entry.action)).toEqual([
+      "create_pair",
+      "grant_access",
+      "grant_access",
+      "grant_access",
+      "pause_pair",
+      "unpause_pair",
+      "open_rfq",
+      "submit_quote",
+      "accept_quote",
+      "mark_settlement_progression",
+      "mark_settlement_progression"
+    ]);
+    expect(state.audits).toHaveLength(11);
   });
 
-  it("accepts explicit registration and grant overrides", async () => {
-    const { app } = createTestDependencies();
-    const pair = await app.registerPair({
+  it("enforces permissions, single-dealer access control, and not-found behavior", async () => {
+    const { app, state, clock } = createTestDependencies();
+
+    const pair = await app.createPair({
       actorId: "operator-1",
-      attestedBy: "auditor-1",
-      pairId: "pair-explicit",
-      mode: "SingleDealerPair",
       operatorId: "operator-1",
-      dealers: ["dealer-alpha"],
+      dealerId: "dealer-alpha",
       jurisdiction: "US",
-      rulebookReleaseId: "rulebook-explicit",
-      rulebookVersion: "v2",
-      rulebookSummary: "revised"
+      rulebookSummary: "initial",
+      rulebookVersion: "v1"
     });
-    const grant = await app.grantAccess({
+    clock.advanceBy(1_000);
+    await app.grantAccess({
       actorId: "operator-1",
       pairId: pair.pairId,
-      subjectId: "auditor-1",
-      role: "auditor",
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    clock.advanceBy(1_000);
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber",
       entitlements: ["view_audit"]
     });
-    const delegatedOperator = await app.grantAccess({
+    clock.advanceBy(1_000);
+    const rfq = await app.openRfq({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      instrumentId: "CUSIP-1",
+      side: "sell",
+      quantity: 10
+    });
+    clock.advanceBy(1_000);
+    const quote = await app.submitQuote({
+      actorId: "dealer-alpha",
+      pairId: pair.pairId,
+      rfqId: rfq.rfqId,
+      price: 100,
+      quantity: 10,
+      expiresAt: "2026-04-02T00:30:00.000Z"
+    });
+
+    await expect(
+      app.grantAccess({
+        actorId: "subscriber-1",
+        pairId: pair.pairId,
+        subjectId: "auditor-1",
+        role: "auditor"
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+    await expect(
+      app.grantAccess({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        subjectId: "dealer-beta",
+        role: "dealer"
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER" }));
+    await expect(
+      app.pausePair({
+        actorId: "subscriber-1",
+        pairId: pair.pairId,
+        state: "paused",
+        reason: "nope"
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+    await expect(
+      app.openRfq({
+        actorId: "subscriber-1",
+        pairId: "missing",
+        instrumentId: "CUSIP-1",
+        side: "buy",
+        quantity: 10
+      })
+    ).rejects.toThrow("Pair missing was not found.");
+    await expect(
+      app.rejectRfq({
+        actorId: "dealer-alpha",
+        pairId: pair.pairId,
+        rfqId: "missing"
+      })
+    ).rejects.toThrow("RFQ missing was not found.");
+    await expect(
+      app.cancelRfq({
+        actorId: "subscriber-2",
+        pairId: pair.pairId,
+        rfqId: rfq.rfqId
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+
+    state.accessGrants.set(pair.pairId, [
+      ...(state.accessGrants.get(pair.pairId) ?? []),
+      {
+        grantId: "manual-dealer-beta",
+        pairId: pair.pairId,
+        subjectId: "dealer-beta",
+        role: "dealer",
+        grantedAt: "2026-04-02T00:00:00.000Z",
+        grantedBy: "operator-1",
+        entitlements: ["respond_quote", "view_pair"]
+      }
+    ]);
+
+    await expect(
+      app.rejectRfq({
+        actorId: "dealer-beta",
+        pairId: pair.pairId,
+        rfqId: rfq.rfqId
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+    await expect(
+      app.acceptQuote({
+        actorId: "subscriber-1",
+        pairId: pair.pairId,
+        rfqId: rfq.rfqId,
+        quoteId: "missing"
+      })
+    ).rejects.toThrow("Quote missing was not found.");
+    await expect(
+      app.markSettlementProgression({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        instructionId: "missing",
+        status: "affirmed"
+      })
+    ).rejects.toThrow("Settlement instruction missing was not found.");
+    expect(await app.getOperatorView("missing")).toBeNull();
+    expect(await app.getSubscriberView("missing", "subscriber-1")).toBeNull();
+    expect(await app.getDealerWorkbenchView("missing", "dealer-alpha")).toBeNull();
+    expect(await app.getAuditTrail("missing")).toBeNull();
+    expect(await app.getVenueHealth("missing")).toBeNull();
+    expect(quote.quote.status).toBe("open");
+  });
+
+  it("supports idempotent cancel and reject flows without mutating terminal state twice", async () => {
+    const { app, clock } = createTestDependencies();
+
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      dealerId: "dealer-alpha",
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v1"
+    });
+    clock.advanceBy(1_000);
+    await app.grantAccess({
       actorId: "operator-1",
       pairId: pair.pairId,
-      subjectId: "operator-2",
-      role: "operator"
+      subjectId: "subscriber-1",
+      role: "subscriber"
     });
-    const paused = await app.pausePair({
-      actorId: "operator-2",
+    clock.advanceBy(1_000);
+    const cancellableRfq = await app.openRfq({
+      actorId: "subscriber-1",
       pairId: pair.pairId,
-      state: "paused",
-      reason: "delegated control"
+      instrumentId: "CUSIP-1",
+      side: "buy",
+      quantity: 10
+    });
+    clock.advanceBy(1_000);
+    const cancelled = await app.cancelRfq({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      rfqId: cancellableRfq.rfqId
+    });
+    clock.advanceBy(1_000);
+    const cancelledAgain = await app.cancelRfq({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      rfqId: cancellableRfq.rfqId
+    });
+    clock.advanceBy(1_000);
+    const rejectableRfq = await app.openRfq({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      instrumentId: "CUSIP-2",
+      side: "sell",
+      quantity: 5
+    });
+    clock.advanceBy(1_000);
+    const rejected = await app.rejectRfq({
+      actorId: "dealer-alpha",
+      pairId: pair.pairId,
+      rfqId: rejectableRfq.rfqId,
+      reason: "notional too small"
+    });
+    clock.advanceBy(1_000);
+    const rejectedAgain = await app.rejectRfq({
+      actorId: "dealer-alpha",
+      pairId: pair.pairId,
+      rfqId: rejectableRfq.rfqId
     });
 
-    expect(pair).toEqual({
-      ...pair,
-      pairId: "pair-explicit",
-      regulatoryAttestation: {
-        ...pair.regulatoryAttestation,
-        attestedBy: "auditor-1"
-      },
-      rulebookRelease: {
-        ...pair.rulebookRelease,
-        releaseId: "rulebook-explicit",
-        version: "v2",
-        summary: "revised"
-      }
-    });
-    expect(grant.entitlements).toEqual(["view_audit", "view_pair"]);
-    expect(delegatedOperator.entitlements).toEqual([
-      "approve_pair",
-      "manage_access",
-      "pause_pair",
-      "view_audit",
-      "view_pair"
-    ]);
-    expect(paused.pauseState).toEqual({
-      state: "paused",
-      changedAt: paused.updatedAt,
-      changedBy: "operator-2",
-      reason: "delegated control"
-    });
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelledAgain).toEqual(cancelled);
+    expect(rejected.status).toBe("rejected");
+    expect(rejectedAgain).toEqual(rejected);
   });
-});
 
-describe("draft health wrappers", () => {
-  it("builds compatibility health read models and responses", () => {
-    expect(
-      buildVenueHealthReadModel({
-        mode: "SingleDealerPair",
-        operatorId: "operator-1",
-        dealers: ["dealer-alpha"],
-        marketingLabel: "Canton Dark Pair"
+  it("expires quotes before acceptance and keeps settlement progression permissioned", async () => {
+    const { app, state, clock } = createTestDependencies();
+
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      dealerId: "dealer-alpha",
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v1"
+    });
+    clock.advanceBy(1_000);
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    clock.advanceBy(1_000);
+    const rfq = await app.openRfq({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      instrumentId: "CUSIP-3",
+      side: "buy",
+      quantity: 12
+    });
+    clock.advanceBy(1_000);
+    const { quote } = await app.submitQuote({
+      actorId: "dealer-alpha",
+      pairId: pair.pairId,
+      rfqId: rfq.rfqId,
+      price: 99.5,
+      quantity: 12,
+      expiresAt: "2026-04-02T00:00:05.000Z"
+    });
+    clock.set("2026-04-02T00:00:06.000Z");
+
+    await expect(
+      app.acceptQuote({
+        actorId: "subscriber-1",
+        pairId: pair.pairId,
+        rfqId: rfq.rfqId,
+        quoteId: quote.quoteId
       })
-    ).toEqual({
-      title: "SingleDealerPair bootstrap",
-      status: "healthy",
-      detail: "Operator operator-1 has 1 directed dealer configuration(s).",
-      summary: {
-        pairId: "draft-preview",
-        mode: "SingleDealerPair",
-        operatorId: "operator-1",
-        dealers: ["dealer-alpha"],
-        paused: false,
-        rulebookVersion: "draft",
-        activeParticipantCount: 2,
-        ledgerFacts: ["Shared RFQ state", "Shared execution state"],
-        offLedgerFacts: [
-          "Operator query cache",
-          "Operator analytics",
-          "Telemetry projection",
-          "Transient UI state"
-        ]
-      },
-      violations: []
+    ).rejects.toThrow(expect.objectContaining({ code: "QUOTE_EXPIRED" }));
+
+    expect(state.quotes.get(quote.quoteId)?.status).toBe("expired");
+    expect(state.rfqs.get(rfq.rfqId)?.status).toBe("quote_expired");
+    expect(state.audits.map((entry) => entry.action)).toContain("expire_quote");
+
+    const expiredRfq = state.rfqs.get(rfq.rfqId);
+    const expiredQuote = state.quotes.get(quote.quoteId);
+
+    if (expiredRfq === undefined || expiredQuote === undefined) {
+      throw new Error("Expected expired RFQ and quote state to be present.");
+    }
+
+    state.rfqs.set(rfq.rfqId, {
+      ...expiredRfq,
+      status: "quote_expired"
     });
-    expect(
-      buildVenueHealthReadModel({
-        mode: "ATSPair",
-        operatorId: "operator-2",
-        dealers: ["dealer-alpha", "dealer-beta"],
-        marketingLabel: "Canton Dark ATS"
-      }).summary
-    ).toEqual({
-      pairId: "draft-preview",
-      mode: "ATSPair",
+    state.quotes.set(quote.quoteId, {
+      ...expiredQuote,
+      status: "open"
+    });
+
+    await expect(
+      app.acceptQuote({
+        actorId: "subscriber-1",
+        pairId: pair.pairId,
+        rfqId: rfq.rfqId,
+        quoteId: quote.quoteId
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "QUOTE_EXPIRED" }));
+    expect(state.rfqs.get(rfq.rfqId)?.status).toBe("quote_expired");
+
+    const secondPair = await app.createPair({
+      actorId: "operator-2",
       operatorId: "operator-2",
-      dealers: ["dealer-alpha", "dealer-beta"],
-      paused: false,
-      rulebookVersion: "draft",
-      activeParticipantCount: 3,
-      ledgerFacts: ["Shared RFQ state", "Shared execution state"],
-      offLedgerFacts: [
-        "Operator query cache",
-        "Operator analytics",
-        "Telemetry projection",
-        "Transient UI state"
-      ]
+      dealerId: "dealer-beta",
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v1"
     });
-    expect(
-      buildVenueHealthResponse(
-        {
-          mode: "ATSPair",
-          operatorId: " ",
-          dealers: [],
-          marketingLabel: "Operator stock market mirror"
-        },
-        () => new Date("2026-04-02T01:00:00.000Z")
-      )
-    ).toEqual({
-      service: "venue-api",
-      generatedAt: "2026-04-02T01:00:00.000Z",
-      venue: {
-        title: "ATSPair bootstrap",
-        status: "rejected",
-        detail: "3 venue policy issue(s) require remediation before launch.",
-        summary: {
-          pairId: "draft-preview",
-          mode: "ATSPair",
-          operatorId: "",
-          dealers: [],
-          paused: false,
-          rulebookVersion: "draft",
-          activeParticipantCount: 0,
-          ledgerFacts: ["Shared RFQ state", "Shared execution state"],
-          offLedgerFacts: [
-            "Operator query cache",
-            "Operator analytics",
-            "Telemetry projection",
-            "Transient UI state"
-          ]
-        },
-        violations: [
-          "OPERATOR_ID_REQUIRED: Each venue configuration must identify the owning operator.",
-          "DISALLOWED_USER_FACING_TERM: User-facing labels must avoid the terms 'exchange' and 'stock market'.",
-          "ATS_PAIR_REQUIRES_AT_LEAST_ONE_DIRECTED_DEALER: ATSPair venues must configure at least one directed dealer."
-        ]
-      }
+    clock.advanceBy(1_000);
+    await app.grantAccess({
+      actorId: "operator-2",
+      pairId: secondPair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber"
     });
-    expect(
-      buildVenueHealthReadModel({
-        mode: "SingleDealerPair",
-        operatorId: " ",
-        dealers: [],
-        marketingLabel: "Draft Pair"
-      }).summary
-    ).toEqual({
-      pairId: "draft-preview",
-      mode: "SingleDealerPair",
-      operatorId: "",
-      dealers: [],
-      paused: false,
-      rulebookVersion: "draft",
-      activeParticipantCount: 0,
-      ledgerFacts: ["Shared RFQ state", "Shared execution state"],
-      offLedgerFacts: [
-        "Operator query cache",
-        "Operator analytics",
-        "Telemetry projection",
-        "Transient UI state"
-      ]
+    clock.advanceBy(1_000);
+    const secondRfq = await app.openRfq({
+      actorId: "subscriber-2",
+      pairId: secondPair.pairId,
+      instrumentId: "CUSIP-4",
+      side: "buy",
+      quantity: 2
     });
-    expect(
-      Number.isNaN(
-        Date.parse(
-          buildVenueHealthResponse({
-            mode: "SingleDealerPair",
-            operatorId: "operator-1",
-            dealers: ["dealer-alpha"],
-            marketingLabel: "Canton Dark Pair"
-          }).generatedAt
-        )
-      )
-    ).toBe(false);
+    clock.advanceBy(1_000);
+    const secondQuote = await app.submitQuote({
+      actorId: "dealer-beta",
+      pairId: secondPair.pairId,
+      rfqId: secondRfq.rfqId,
+      price: 101,
+      quantity: 2,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    clock.advanceBy(1_000);
+    const secondAccepted = await app.acceptQuote({
+      actorId: "subscriber-2",
+      pairId: secondPair.pairId,
+      rfqId: secondRfq.rfqId,
+      quoteId: secondQuote.quote.quoteId
+    });
+
+    await expect(
+      app.markSettlementProgression({
+        actorId: "subscriber-2",
+        pairId: secondPair.pairId,
+        instructionId: secondAccepted.settlementInstruction.instructionId,
+        status: "affirmed"
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
   });
 });

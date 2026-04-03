@@ -13,6 +13,7 @@ This repository uses MADR-style records so that durable decisions stay tied to c
 - [0007 Operator-Owned Risk Controls and Vendor Boundary](0007-operator-owned-risk-controls-and-vendor-boundary.md)
 - [0008 Demo Mode Determinism and Replay](0008-demo-mode-determinism-and-replay.md)
 - [0009 Headless Kernel, Ports, and Deterministic Simulation Base](0009-headless-kernel-ports-and-deterministic-simulation-base.md)
+- [0010 Phase 1 Single-Dealer RFQ Ledger and Backend Model](0010-phase1-singledealer-rfq-ledger-and-backend-model.md)
 
 ## Record Format
 

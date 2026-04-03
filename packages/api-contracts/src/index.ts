@@ -1,16 +1,23 @@
-import type { PairSummaryView, VenueHealthReadModel } from "@canton-dark/query-models";
+import type {
+  AuditTrailView,
+  DealerWorkbenchView,
+  OperatorView,
+  SubscriberView,
+  VenueHealthReadModel
+} from "@canton-dark/query-models";
+import type { Entitlement } from "@canton-dark/domain-core";
 
-export type RegisterPairRequest = {
-  dealers: readonly string[];
+export type CreatePairRequest = {
+  dealerId: string;
   jurisdiction: string;
-  mode: "ATSPair" | "SingleDealerPair";
+  mode: "SingleDealerPair";
   operatorId: string;
   rulebookSummary: string;
   rulebookVersion: string;
 };
 
 export type GrantAccessRequest = {
-  entitlements?: readonly string[];
+  entitlements?: readonly Entitlement[];
   role: "auditor" | "dealer" | "operator" | "settlement_delegate" | "subscriber";
   subjectId: string;
 };
@@ -20,29 +27,30 @@ export type PausePairRequest = {
   state: "active" | "paused";
 };
 
-export type SubmitRfqRequest = {
-  directedDealerIds: readonly string[];
-  expiresAt: string;
+export type OpenRfqRequest = {
   instrumentId: string;
   quantity: number;
   side: "buy" | "sell";
 };
 
-export type SubmitDarkOrderRequest = {
-  limitPrice: number;
+export type RejectRfqRequest = {
+  reason?: string;
+};
+
+export type SubmitQuoteRequest = {
+  expiresAt: string;
+  price: number;
   quantity: number;
-  side: "buy" | "sell";
+};
+
+export type MarkSettlementProgressionRequest = {
+  status: "affirmed" | "failed" | "instructed" | "pending" | "settled";
 };
 
 export type HealthResponse = {
   generatedAt: string;
   service: "venue-api";
   venue: VenueHealthReadModel;
-};
-
-export type ValidateVenueResponse = {
-  ok: boolean;
-  violations: readonly string[];
 };
 
 export type OpenApiSchema = {
@@ -185,15 +193,73 @@ const objectSchema = <T extends Record<string, unknown>>(
   }
 });
 
-const pairSummaryViewSchema = objectSchema<PairSummaryView>({
+const pairSummaryViewSchema = objectSchema<OperatorView["pair"]>({
   pairId: stringSchema(),
-  mode: enumSchema(["ATSPair", "SingleDealerPair"]),
+  mode: enumSchema(["SingleDealerPair"]),
   operatorId: stringSchema(),
-  dealers: arraySchema(stringSchema()),
+  dealerId: stringSchema(),
   paused: booleanSchema(),
   rulebookVersion: stringSchema(),
   approvalStatus: enumSchema(["approved", "rejected"]),
   attestationStatus: enumSchema(["attested", "expired"])
+});
+
+const participantAccessItemSchema = objectSchema<OperatorView["access"]["participants"][number]>({
+  subjectId: stringSchema(),
+  roles: arraySchema(
+    enumSchema(["auditor", "dealer", "operator", "settlement_delegate", "subscriber"])
+  ),
+  entitlements: arraySchema(stringSchema())
+});
+
+const participantAccessSchema = objectSchema<OperatorView["access"]>({
+  pairId: stringSchema(),
+  participants: arraySchema(participantAccessItemSchema)
+});
+
+const rfqViewSchema = objectSchema<OperatorView["rfqs"][number]>({
+  rfqId: stringSchema(),
+  dealerId: stringSchema(),
+  subscriberId: stringSchema(),
+  instrumentId: stringSchema(),
+  side: enumSchema(["buy", "sell"]),
+  quantity: numberSchema(),
+  status: enumSchema(["accepted", "cancelled", "open", "quote_expired", "quoted", "rejected"]),
+  createdAt: stringSchema()
+});
+
+const quoteViewSchema = objectSchema<OperatorView["quotes"][number]>({
+  quoteId: stringSchema(),
+  rfqId: stringSchema(),
+  dealerId: stringSchema(),
+  subscriberId: stringSchema(),
+  price: numberSchema(),
+  quantity: numberSchema(),
+  expiresAt: stringSchema(),
+  status: enumSchema(["accepted", "expired", "open"]),
+  createdAt: stringSchema()
+});
+
+const executionViewSchema = objectSchema<OperatorView["executions"][number]>({
+  executionId: stringSchema(),
+  pairId: stringSchema(),
+  rfqId: stringSchema(),
+  quoteId: stringSchema(),
+  dealerId: stringSchema(),
+  subscriberId: stringSchema(),
+  instrumentId: stringSchema(),
+  side: enumSchema(["buy", "sell"]),
+  quantity: numberSchema(),
+  price: numberSchema(),
+  acceptedAt: stringSchema()
+});
+
+const settlementViewSchema = objectSchema<OperatorView["settlements"][number]>({
+  instructionId: stringSchema(),
+  executionId: stringSchema(),
+  status: enumSchema(["affirmed", "failed", "instructed", "pending", "settled"]),
+  createdAt: stringSchema(),
+  updatedAt: stringSchema()
 });
 
 const venueHealthSchema = objectSchema<VenueHealthReadModel>({
@@ -202,7 +268,7 @@ const venueHealthSchema = objectSchema<VenueHealthReadModel>({
   detail: stringSchema(),
   summary: objectSchema<VenueHealthReadModel["summary"]>({
     pairId: stringSchema(),
-    mode: enumSchema(["ATSPair", "SingleDealerPair"]),
+    mode: enumSchema(["SingleDealerPair"]),
     operatorId: stringSchema(),
     dealers: arraySchema(stringSchema()),
     paused: booleanSchema(),
@@ -214,10 +280,53 @@ const venueHealthSchema = objectSchema<VenueHealthReadModel>({
   violations: arraySchema(stringSchema())
 });
 
-export const registerPairRequestSchema = objectSchema<RegisterPairRequest>({
-  mode: enumSchema(["ATSPair", "SingleDealerPair"]),
+const operatorViewSchema = objectSchema<OperatorView>({
+  pair: pairSummaryViewSchema,
+  access: participantAccessSchema,
+  rfqs: arraySchema(rfqViewSchema),
+  quotes: arraySchema(quoteViewSchema),
+  executions: arraySchema(executionViewSchema),
+  settlements: arraySchema(settlementViewSchema),
+  health: venueHealthSchema
+});
+
+const subscriberViewSchema = objectSchema<SubscriberView>({
+  pair: pairSummaryViewSchema,
+  subscriberId: stringSchema(),
+  entitlements: arraySchema(stringSchema()),
+  canOpenRfq: booleanSchema(),
+  rfqs: arraySchema(rfqViewSchema),
+  quotes: arraySchema(quoteViewSchema),
+  executions: arraySchema(executionViewSchema),
+  settlements: arraySchema(settlementViewSchema)
+});
+
+const dealerWorkbenchViewSchema = objectSchema<DealerWorkbenchView>({
+  pair: pairSummaryViewSchema,
+  dealerId: stringSchema(),
+  rfqs: arraySchema(rfqViewSchema),
+  quotes: arraySchema(quoteViewSchema),
+  executions: arraySchema(executionViewSchema)
+});
+
+const auditTrailViewSchema = objectSchema<AuditTrailView>({
+  pairId: stringSchema(),
+  entries: arraySchema(
+    objectSchema<AuditTrailView["entries"][number]>({
+      action: stringSchema(),
+      actorId: stringSchema(),
+      at: stringSchema(),
+      detail: stringSchema(),
+      entityId: optionalSchema(stringSchema()),
+      pairId: stringSchema()
+    })
+  )
+});
+
+export const createPairRequestSchema = objectSchema<CreatePairRequest>({
+  mode: enumSchema(["SingleDealerPair"]),
   operatorId: stringSchema(),
-  dealers: arraySchema(stringSchema()),
+  dealerId: stringSchema(),
   jurisdiction: stringSchema(),
   rulebookVersion: stringSchema(),
   rulebookSummary: stringSchema()
@@ -234,19 +343,26 @@ export const pausePairRequestSchema = objectSchema<PausePairRequest>({
   reason: optionalSchema(stringSchema())
 });
 
-export const submitRfqRequestSchema = objectSchema<SubmitRfqRequest>({
-  directedDealerIds: arraySchema(stringSchema()),
+export const openRfqRequestSchema = objectSchema<OpenRfqRequest>({
   instrumentId: stringSchema(),
   side: enumSchema(["buy", "sell"]),
+  quantity: numberSchema()
+});
+
+export const rejectRfqRequestSchema = objectSchema<RejectRfqRequest>({
+  reason: optionalSchema(stringSchema())
+});
+
+export const submitQuoteRequestSchema = objectSchema<SubmitQuoteRequest>({
+  price: numberSchema(),
   quantity: numberSchema(),
   expiresAt: stringSchema()
 });
 
-export const submitDarkOrderRequestSchema = objectSchema<SubmitDarkOrderRequest>({
-  side: enumSchema(["buy", "sell"]),
-  quantity: numberSchema(),
-  limitPrice: numberSchema()
-});
+export const markSettlementProgressionRequestSchema =
+  objectSchema<MarkSettlementProgressionRequest>({
+    status: enumSchema(["affirmed", "failed", "instructed", "pending", "settled"])
+  });
 
 export const healthResponseSchema = objectSchema<HealthResponse>({
   service: enumSchema(["venue-api"]),
@@ -254,27 +370,26 @@ export const healthResponseSchema = objectSchema<HealthResponse>({
   venue: venueHealthSchema
 });
 
-export const validateVenueResponseSchema = objectSchema<ValidateVenueResponse>({
-  ok: booleanSchema(),
-  violations: arraySchema(stringSchema())
-});
-
-export const parseRegisterPairRequest = (value: unknown): RegisterPairRequest =>
-  registerPairRequestSchema.parse(value);
+export const parseCreatePairRequest = (value: unknown): CreatePairRequest =>
+  createPairRequestSchema.parse(value);
 
 export const parseHealthResponse = (value: unknown): HealthResponse =>
   healthResponseSchema.parse(value);
 
 export const contractSchemas = {
-  RegisterPairRequest: registerPairRequestSchema,
+  CreatePairRequest: createPairRequestSchema,
   GrantAccessRequest: grantAccessRequestSchema,
   PausePairRequest: pausePairRequestSchema,
-  SubmitRfqRequest: submitRfqRequestSchema,
-  SubmitDarkOrderRequest: submitDarkOrderRequestSchema,
-  PairSummaryView: pairSummaryViewSchema,
+  OpenRfqRequest: openRfqRequestSchema,
+  RejectRfqRequest: rejectRfqRequestSchema,
+  SubmitQuoteRequest: submitQuoteRequestSchema,
+  MarkSettlementProgressionRequest: markSettlementProgressionRequestSchema,
+  OperatorView: operatorViewSchema,
+  SubscriberView: subscriberViewSchema,
+  DealerWorkbenchView: dealerWorkbenchViewSchema,
+  AuditTrailView: auditTrailViewSchema,
   VenueHealthReadModel: venueHealthSchema,
-  HealthResponse: healthResponseSchema,
-  ValidateVenueResponse: validateVenueResponseSchema
+  HealthResponse: healthResponseSchema
 } as const;
 
 const ref = (name: keyof typeof contractSchemas) => ({
@@ -308,17 +423,7 @@ export const generateOpenApiDocument = () => ({
           required: true,
           content: {
             "application/json": {
-              schema: ref("RegisterPairRequest")
-            }
-          }
-        },
-        responses: {
-          "201": {
-            description: "Registered pair summary",
-            content: {
-              "application/json": {
-                schema: ref("PairSummaryView")
-              }
+              schema: ref("CreatePairRequest")
             }
           }
         }
@@ -333,11 +438,6 @@ export const generateOpenApiDocument = () => ({
               schema: ref("GrantAccessRequest")
             }
           }
-        },
-        responses: {
-          "202": {
-            description: "Access grant accepted"
-          }
         }
       }
     },
@@ -350,11 +450,6 @@ export const generateOpenApiDocument = () => ({
               schema: ref("PausePairRequest")
             }
           }
-        },
-        responses: {
-          "202": {
-            description: "Pause state updated"
-          }
         }
       }
     },
@@ -364,30 +459,118 @@ export const generateOpenApiDocument = () => ({
           required: true,
           content: {
             "application/json": {
-              schema: ref("SubmitRfqRequest")
+              schema: ref("OpenRfqRequest")
             }
-          }
-        },
-        responses: {
-          "202": {
-            description: "RFQ accepted"
           }
         }
       }
     },
-    "/pairs/{pairId}/dark-orders": {
+    "/pairs/{pairId}/rfqs/{rfqId}/reject": {
       post: {
         requestBody: {
           required: true,
           content: {
             "application/json": {
-              schema: ref("SubmitDarkOrderRequest")
+              schema: ref("RejectRfqRequest")
             }
           }
-        },
+        }
+      }
+    },
+    "/pairs/{pairId}/rfqs/{rfqId}/cancel": {
+      post: {
         responses: {
-          "202": {
-            description: "Dark order accepted"
+          "200": {
+            description: "RFQ cancelled"
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/rfqs/{rfqId}/quotes": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("SubmitQuoteRequest")
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/quotes/{quoteId}/accept": {
+      post: {
+        responses: {
+          "200": {
+            description: "Quote accepted"
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/settlements/{instructionId}/progress": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("MarkSettlementProgressionRequest")
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/views/operator": {
+      get: {
+        responses: {
+          "200": {
+            description: "Operator view",
+            content: {
+              "application/json": {
+                schema: ref("OperatorView")
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/views/subscriber": {
+      get: {
+        responses: {
+          "200": {
+            description: "Subscriber view",
+            content: {
+              "application/json": {
+                schema: ref("SubscriberView")
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/views/dealer-workbench": {
+      get: {
+        responses: {
+          "200": {
+            description: "Dealer workbench view",
+            content: {
+              "application/json": {
+                schema: ref("DealerWorkbenchView")
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/audit-trail": {
+      get: {
+        responses: {
+          "200": {
+            description: "Audit trail view",
+            content: {
+              "application/json": {
+                schema: ref("AuditTrailView")
+              }
+            }
           }
         }
       }

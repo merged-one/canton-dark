@@ -2,21 +2,42 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import {
+  acceptDealerQuote,
   createAccessGrant,
+  createDealerQuote,
   createPairInstance,
-  createRfq,
+  createRfqSession,
+  expireDealerQuote,
+  markRfqQuoteExpired,
+  markRfqQuoted,
   resolveEntitlements,
   revokeAccessGrant
 } from "./index";
 
 const createdAt = "2026-04-02T00:00:00.000Z";
-const createDeterministicPropertyConfig = (numRuns: number) => ({
-  seed: 424242,
-  numRuns,
-  endOnFailure: true
-});
 
-describe("domain-core properties", () => {
+const createDeterministicPropertyConfig = (
+  overrides: Partial<{
+    endOnFailure: boolean;
+    numRuns: number;
+    path?: string;
+    seed: number;
+  }> = {}
+) => {
+  const parsedSeed = Number(process.env.FC_SEED ?? "424242");
+  const parsedNumRuns = Number(process.env.FC_NUM_RUNS ?? "64");
+  const path = process.env.FC_PATH ?? undefined;
+
+  return {
+    seed: Number.isFinite(parsedSeed) ? parsedSeed : 424242,
+    numRuns: Number.isFinite(parsedNumRuns) ? parsedNumRuns : 64,
+    endOnFailure: true,
+    ...(path !== undefined ? { path } : {}),
+    ...overrides
+  };
+};
+
+describe("phase 1 domain-core properties", () => {
   it("role permissions are monotonic under grants and revocations", () => {
     fc.assert(
       fc.property(
@@ -72,18 +93,18 @@ describe("domain-core properties", () => {
           }
         }
       ),
-      createDeterministicPropertyConfig(25)
+      createDeterministicPropertyConfig({ numRuns: 25 })
     );
   });
 
-  it("paused pairs reject trading commands", () => {
+  it("quote acceptance only succeeds strictly before expiry", () => {
     fc.assert(
-      fc.property(fc.integer({ min: 1, max: 10_000 }), (seed) => {
+      fc.property(fc.integer({ min: 1, max: 120 }), (secondsBeforeExpiry) => {
         const pair = createPairInstance({
-          pairId: `pair-${seed}`,
+          pairId: "pair-1",
           mode: "SingleDealerPair",
           operatorId: "operator-1",
-          dealers: ["dealer-1"],
+          dealerId: "dealer-alpha",
           createdAt,
           operatorApproval: {
             status: "approved",
@@ -102,44 +123,70 @@ describe("domain-core properties", () => {
             effectiveAt: createdAt,
             publishedBy: "operator-1",
             summary: "initial"
-          },
-          pauseState: {
-            state: "paused",
-            changedAt: createdAt,
-            changedBy: "operator-1",
-            reason: "test pause"
           }
         });
-
         const subscriberGrant = createAccessGrant({
-          grantId: "grant-1",
-          pairId: pair.pairId,
+          grantId: "grant-subscriber",
+          pairId: "pair-1",
           subjectId: "subscriber-1",
           role: "subscriber",
           grantedAt: createdAt,
           grantedBy: "operator-1"
         });
+        const dealerGrant = createAccessGrant({
+          grantId: "grant-dealer",
+          pairId: "pair-1",
+          subjectId: "dealer-alpha",
+          role: "dealer",
+          grantedAt: createdAt,
+          grantedBy: "operator-1"
+        });
+        const rfq = createRfqSession({
+          rfqId: "rfq-1",
+          pair,
+          accessGrants: [subscriberGrant],
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-1",
+          side: "buy",
+          quantity: 10,
+          createdAt
+        });
+        const quotedRfq = markRfqQuoted(rfq, "2026-04-02T00:00:10.000Z");
+        const quote = createDealerQuote({
+          quoteId: "quote-1",
+          pair,
+          rfq,
+          accessGrants: [dealerGrant],
+          dealerId: "dealer-alpha",
+          price: 100,
+          quantity: 10,
+          createdAt: "2026-04-02T00:00:10.000Z",
+          expiresAt: "2026-04-02T00:05:00.000Z"
+        });
+        const acceptedAt = new Date(
+          Date.parse("2026-04-02T00:05:00.000Z") - secondsBeforeExpiry * 1_000
+        ).toISOString();
 
-        expect(() =>
-          createRfq({
-            rfqId: "rfq-1",
+        expect(
+          acceptDealerQuote({
             pair,
+            rfq: quotedRfq,
+            quote,
             accessGrants: [subscriberGrant],
-            requesterId: "subscriber-1",
-            directedDealerIds: ["dealer-1"],
-            instrumentId: "CUSIP-1",
-            side: "buy",
-            quantity: 10,
-            createdAt,
-            expiresAt: "2026-04-02T00:05:00.000Z"
-          })
-        ).toThrow(
-          expect.objectContaining({
-            code: "PAIR_IS_PAUSED"
-          })
-        );
+            acceptedBy: "subscriber-1",
+            acceptedAt,
+            executionId: "execution-1",
+            instructionId: "instruction-1"
+          }).quote.status
+        ).toBe("accepted");
+
+        const expiredQuote = expireDealerQuote(quote, "2026-04-02T00:05:00.000Z");
+        const expiredRfq = markRfqQuoteExpired(quotedRfq, "2026-04-02T00:05:00.000Z");
+
+        expect(expiredQuote.status).toBe("expired");
+        expect(expiredRfq.status).toBe("quote_expired");
       }),
-      createDeterministicPropertyConfig(15)
+      createDeterministicPropertyConfig({ numRuns: 15 })
     );
   });
 });

@@ -1,37 +1,37 @@
-import type { HealthResponse } from "@canton-dark/api-contracts";
 import {
+  acceptDealerQuote,
+  cancelRfqSession,
   createAccessGrant,
-  createDarkOrder,
+  createDealerQuote,
   createDomainError,
-  createExecutionFromQuote,
-  createMatchProposal,
   createPairInstance,
-  createQuote,
-  createRfq,
-  evaluateVenueConfiguration,
+  createRfqSession,
+  expireDealerQuote,
   hasEntitlement,
+  markRfqQuoteExpired,
+  markRfqQuoted,
+  progressSettlementInstruction,
+  rejectRfqSession,
   setPairPauseState,
-  transitionSettlementStatus,
   type AccessGrant,
-  type DarkOrder,
-  type Entitlement,
-  type Execution,
-  type MatchProposal,
+  type AuditRecord,
+  type DealerQuote,
+  type ExecutionTicket,
   type PairInstance,
-  type PairMode,
-  type ParticipantRole,
-  type Quote,
-  type RFQ,
-  type SettlementStatus,
-  type VenueConfigurationDraft
+  type RFQSession,
+  type SettlementInstruction,
+  type SettlementStatus
 } from "@canton-dark/domain-core";
 import {
-  buildPairDashboardView,
-  projectPairSummary,
+  projectAuditTrail,
+  projectDealerWorkbenchView,
+  projectOperatorView,
+  projectSubscriberView,
   projectVenueHealth,
-  type PairDashboardView,
-  type PairSummaryView,
-  type TradingActivityView,
+  type AuditTrailView,
+  type DealerWorkbenchView,
+  type OperatorView,
+  type SubscriberView,
   type VenueHealthReadModel
 } from "@canton-dark/query-models";
 
@@ -43,112 +43,29 @@ export type IdGenerator = {
   nextId: (namespace: string) => string;
 };
 
-export type LedgerEventType =
-  | "access.granted"
-  | "dark-order.submitted"
-  | "execution.recorded"
-  | "match.proposed"
-  | "pair.pause-state.updated"
-  | "pair.registered"
-  | "quote.recorded"
-  | "rfq.submitted";
-
-export type LedgerEvent = {
-  aggregateId: string;
-  eventId: string;
-  occurredAt: string;
-  pairId: string;
-  payload: unknown;
-  type: LedgerEventType;
-};
-
-export type ProjectionCollection = "access" | "activity" | "dashboard" | "health" | "pair-summary";
-
-export type RiskAction =
-  | "execute_quote"
-  | "grant_access"
-  | "pause_pair"
-  | "propose_match"
-  | "record_quote"
-  | "register_pair"
-  | "submit_dark_order"
-  | "submit_rfq";
-
-export type RiskDecision = {
-  approved: boolean;
-  reason?: string;
-};
-
-export type RiskControlInput = {
-  action: RiskAction;
-  actorId: string;
-  pair: PairInstance;
-  price?: number;
-  quantity?: number;
-};
-
-export type AuditEntry = {
-  action: string;
-  actorId: string;
-  at: string;
-  detail: string;
-  pairId: string;
-};
-
-export type NotificationMessage = {
-  at: string;
-  detail: string;
-  kind: string;
-  pairId: string;
-  recipientIds: readonly string[];
-  subject: string;
-};
-
 export type LedgerPort = {
-  append: (event: LedgerEvent) => Promise<void>;
-  getDarkOrder: (orderId: string) => Promise<DarkOrder | null>;
+  getExecutionTicket: (executionId: string) => Promise<ExecutionTicket | null>;
   getPair: (pairId: string) => Promise<PairInstance | null>;
-  getQuote: (quoteId: string) => Promise<Quote | null>;
-  getRfq: (rfqId: string) => Promise<RFQ | null>;
+  getQuote: (quoteId: string) => Promise<DealerQuote | null>;
+  getRfq: (rfqId: string) => Promise<RFQSession | null>;
+  getSettlementInstruction: (instructionId: string) => Promise<SettlementInstruction | null>;
   listAccessGrants: (pairId: string) => Promise<readonly AccessGrant[]>;
-  listDarkOrders: (pairId: string) => Promise<readonly DarkOrder[]>;
-  listEvents: (pairId?: string) => Promise<readonly LedgerEvent[]>;
-  listExecutions: (pairId: string) => Promise<readonly Execution[]>;
-  listMatchProposals: (pairId: string) => Promise<readonly MatchProposal[]>;
-  listQuotes: (pairId: string) => Promise<readonly Quote[]>;
-  listRfqs: (pairId: string) => Promise<readonly RFQ[]>;
+  listExecutionTickets: (pairId: string) => Promise<readonly ExecutionTicket[]>;
+  listPairs: () => Promise<readonly PairInstance[]>;
+  listQuotes: (pairId: string) => Promise<readonly DealerQuote[]>;
+  listRfqs: (pairId: string) => Promise<readonly RFQSession[]>;
+  listSettlementInstructions: (pairId: string) => Promise<readonly SettlementInstruction[]>;
   saveAccessGrant: (grant: AccessGrant) => Promise<void>;
-  saveDarkOrder: (order: DarkOrder) => Promise<void>;
-  saveExecution: (execution: Execution) => Promise<void>;
-  saveMatchProposal: (proposal: MatchProposal) => Promise<void>;
+  saveExecutionTicket: (execution: ExecutionTicket) => Promise<void>;
   savePair: (pair: PairInstance) => Promise<void>;
-  saveQuote: (quote: Quote) => Promise<void>;
-  saveRfq: (rfq: RFQ) => Promise<void>;
-};
-
-export type ProjectionStore = {
-  get: (collection: ProjectionCollection, key: string) => Promise<unknown>;
-  put: (collection: ProjectionCollection, key: string, value: unknown) => Promise<void>;
-};
-
-export type RiskControlPort = {
-  evaluate: (input: RiskControlInput) => Promise<RiskDecision>;
-};
-
-export type SettlementPort = {
-  submit: (execution: Execution) => Promise<SettlementStatus>;
+  saveQuote: (quote: DealerQuote) => Promise<void>;
+  saveRfq: (rfq: RFQSession) => Promise<void>;
+  saveSettlementInstruction: (instruction: SettlementInstruction) => Promise<void>;
 };
 
 export type AuditLogPort = {
-  record: (entry: AuditEntry) => Promise<void>;
-};
-
-export type NotificationPort = {
-  send: (message: NotificationMessage) => Promise<void>;
-};
-
-export type ReferencePricePort = {
-  get: (pairId: string, instrumentId: string) => Promise<number>;
+  list: (pairId?: string) => Promise<readonly AuditRecord[]>;
+  record: (entry: AuditRecord) => Promise<void>;
 };
 
 export type VenueApplicationDependencies = {
@@ -156,19 +73,12 @@ export type VenueApplicationDependencies = {
   clock: Clock;
   idGenerator: IdGenerator;
   ledger: LedgerPort;
-  notifications: NotificationPort;
-  projections: ProjectionStore;
-  referencePrices: ReferencePricePort;
-  riskControl: RiskControlPort;
-  settlement: SettlementPort;
 };
 
-export type RegisterPairCommand = {
+export type CreatePairCommand = {
   actorId: string;
-  attestedBy?: string;
-  dealers: readonly string[];
+  dealerId: string;
   jurisdiction: string;
-  mode: PairMode;
   operatorId: string;
   pairId?: string;
   rulebookReleaseId?: string;
@@ -178,10 +88,10 @@ export type RegisterPairCommand = {
 
 export type GrantAccessCommand = {
   actorId: string;
-  entitlements?: readonly Entitlement[];
+  entitlements?: readonly AccessGrant["entitlements"][number][];
   note?: string;
   pairId: string;
-  role: ParticipantRole;
+  role: AccessGrant["role"];
   subjectId: string;
 };
 
@@ -192,17 +102,22 @@ export type PausePairCommand = {
   state: "active" | "paused";
 };
 
-export type SubmitRfqCommand = {
+export type OpenRfqCommand = {
   actorId: string;
-  directedDealerIds: readonly string[];
-  expiresAt: string;
   instrumentId: string;
   pairId: string;
   quantity: number;
-  side: RFQ["side"];
+  side: RFQSession["side"];
 };
 
-export type RecordQuoteCommand = {
+export type RejectRfqCommand = {
+  actorId: string;
+  pairId: string;
+  reason?: string;
+  rfqId: string;
+};
+
+export type SubmitQuoteCommand = {
   actorId: string;
   expiresAt: string;
   pairId: string;
@@ -211,29 +126,24 @@ export type RecordQuoteCommand = {
   rfqId: string;
 };
 
-export type ExecuteQuoteCommand = {
+export type CancelRfqCommand = {
+  actorId: string;
+  pairId: string;
+  rfqId: string;
+};
+
+export type AcceptQuoteCommand = {
   actorId: string;
   pairId: string;
   quoteId: string;
   rfqId: string;
 };
 
-export type SubmitDarkOrderCommand = {
+export type MarkSettlementProgressionCommand = {
   actorId: string;
-  limitPrice: number;
+  instructionId: string;
   pairId: string;
-  quantity: number;
-  side: DarkOrder["side"];
-};
-
-export type ProposeMatchCommand = {
-  actorId: string;
-  buyOrderId: string;
-  instrumentId: string;
-  pairId: string;
-  proposedPrice: number;
-  proposedQuantity: number;
-  sellOrderId: string;
+  status: SettlementStatus;
 };
 
 const requirePair = async (ledger: LedgerPort, pairId: string): Promise<PairInstance> => {
@@ -246,7 +156,7 @@ const requirePair = async (ledger: LedgerPort, pairId: string): Promise<PairInst
   return pair;
 };
 
-const requireRfq = async (ledger: LedgerPort, rfqId: string): Promise<RFQ> => {
+const requireRfq = async (ledger: LedgerPort, rfqId: string): Promise<RFQSession> => {
   const rfq = await ledger.getRfq(rfqId);
 
   if (rfq === null) {
@@ -256,7 +166,7 @@ const requireRfq = async (ledger: LedgerPort, rfqId: string): Promise<RFQ> => {
   return rfq;
 };
 
-const requireQuote = async (ledger: LedgerPort, quoteId: string): Promise<Quote> => {
+const requireQuote = async (ledger: LedgerPort, quoteId: string): Promise<DealerQuote> => {
   const quote = await ledger.getQuote(quoteId);
 
   if (quote === null) {
@@ -266,128 +176,111 @@ const requireQuote = async (ledger: LedgerPort, quoteId: string): Promise<Quote>
   return quote;
 };
 
-const requireDarkOrder = async (ledger: LedgerPort, orderId: string): Promise<DarkOrder> => {
-  const order = await ledger.getDarkOrder(orderId);
+const requireSettlementInstruction = async (
+  ledger: LedgerPort,
+  instructionId: string
+): Promise<SettlementInstruction> => {
+  const instruction = await ledger.getSettlementInstruction(instructionId);
 
-  if (order === null) {
-    throw new Error(`Dark order ${orderId} was not found.`);
+  if (instruction === null) {
+    throw new Error(`Settlement instruction ${instructionId} was not found.`);
   }
 
-  return order;
+  return instruction;
 };
 
-const buildNotificationRecipients = (
+const ensureActorEntitled = (
+  pair: PairInstance,
   grants: readonly AccessGrant[],
-  fallbackRecipients: readonly string[]
-): readonly string[] => {
-  const grantedRecipients = grants.map((grant) => grant.subjectId);
+  actorId: string,
+  entitlement: AccessGrant["entitlements"][number]
+): void => {
+  if (
+    actorId === pair.operatorId &&
+    entitlement !== "respond_quote" &&
+    entitlement !== "accept_quote"
+  ) {
+    return;
+  }
 
-  return [...new Set([...grantedRecipients, ...fallbackRecipients])].sort((left, right) =>
-    left.localeCompare(right)
-  );
+  if (!hasEntitlement(actorId, grants, entitlement)) {
+    throw createDomainError(
+      "MISSING_ENTITLEMENT",
+      `Actor ${actorId} is missing ${entitlement} permission for pair ${pair.pairId}.`,
+      {
+        actorId,
+        entitlement,
+        pairId: pair.pairId
+      }
+    );
+  }
 };
 
-const createRiskError = (action: RiskAction, decision: RiskDecision): Error =>
-  new Error(decision.reason ?? `${action} was rejected by risk controls.`);
+const ensureSubscriberOwnsRfq = (rfq: RFQSession, actorId: string): void => {
+  if (rfq.subscriberId !== actorId) {
+    throw createDomainError(
+      "MISSING_ENTITLEMENT",
+      `Actor ${actorId} does not own RFQ ${rfq.rfqId}.`,
+      {
+        actorId,
+        rfqId: rfq.rfqId,
+        subscriberId: rfq.subscriberId
+      }
+    );
+  }
+};
 
-const createDraftHealthDetail = (
-  draft: {
-    dealers: readonly string[];
-    operatorId: string;
-  },
-  violationCount: number
-): string =>
-  violationCount === 0
-    ? `Operator ${draft.operatorId.trim()} has ${draft.dealers.length} directed dealer configuration(s).`
-    : `${violationCount} venue policy issue(s) require remediation before launch.`;
+const ensureDealerOwnsRfq = (rfq: RFQSession, actorId: string): void => {
+  if (rfq.dealerId !== actorId) {
+    throw createDomainError(
+      "MISSING_ENTITLEMENT",
+      `Actor ${actorId} does not own RFQ ${rfq.rfqId} as dealer.`,
+      {
+        actorId,
+        dealerId: rfq.dealerId,
+        rfqId: rfq.rfqId
+      }
+    );
+  }
+};
+
+const loadPairSnapshot = async (dependencies: VenueApplicationDependencies, pairId: string) => {
+  const pair = await requirePair(dependencies.ledger, pairId);
+  const [grants, rfqs, quotes, executions, settlements] = await Promise.all([
+    dependencies.ledger.listAccessGrants(pairId),
+    dependencies.ledger.listRfqs(pairId),
+    dependencies.ledger.listQuotes(pairId),
+    dependencies.ledger.listExecutionTickets(pairId),
+    dependencies.ledger.listSettlementInstructions(pairId)
+  ]);
+
+  return {
+    pair,
+    grants,
+    rfqs,
+    quotes,
+    executions,
+    settlements
+  };
+};
+
+const recordAudit = async (
+  dependencies: VenueApplicationDependencies,
+  entry: AuditRecord
+): Promise<void> => {
+  await dependencies.auditLog.record(entry);
+};
 
 export const createVenueApplication = (dependencies: VenueApplicationDependencies) => {
-  const ensureRiskApproved = async (input: RiskControlInput): Promise<void> => {
-    const decision = await dependencies.riskControl.evaluate(input);
+  const nowIso = (): string => dependencies.clock.now().toISOString();
 
-    if (!decision.approved) {
-      throw createRiskError(input.action, decision);
-    }
-  };
-
-  const appendEvent = async (
-    type: LedgerEventType,
-    pairId: string,
-    aggregateId: string,
-    payload: unknown
-  ): Promise<void> => {
-    await dependencies.ledger.append({
-      type,
-      payload,
-      pairId,
-      aggregateId,
-      eventId: dependencies.idGenerator.nextId("event"),
-      occurredAt: dependencies.clock.now().toISOString()
-    });
-  };
-
-  const refreshProjections = async (pair: PairInstance): Promise<PairDashboardView> => {
-    const [grants, rfqs, quotes, executions, darkOrders, matches] = await Promise.all([
-      dependencies.ledger.listAccessGrants(pair.pairId),
-      dependencies.ledger.listRfqs(pair.pairId),
-      dependencies.ledger.listQuotes(pair.pairId),
-      dependencies.ledger.listExecutions(pair.pairId),
-      dependencies.ledger.listDarkOrders(pair.pairId),
-      dependencies.ledger.listMatchProposals(pair.pairId)
-    ]);
-    const dashboard = buildPairDashboardView({
-      pair,
-      grants,
-      records: {
-        rfqs,
-        quotes,
-        executions,
-        darkOrders,
-        matches
-      }
-    });
-
-    await Promise.all([
-      dependencies.projections.put("pair-summary", pair.pairId, projectPairSummary(pair)),
-      dependencies.projections.put("health", pair.pairId, dashboard.health),
-      dependencies.projections.put("access", pair.pairId, dashboard.access),
-      dependencies.projections.put("activity", pair.pairId, dashboard.activity),
-      dependencies.projections.put("dashboard", pair.pairId, dashboard)
-    ]);
-
-    return dashboard;
-  };
-
-  const ensureActorEntitled = (
-    pair: PairInstance,
-    grants: readonly AccessGrant[],
-    actorId: string,
-    entitlement: Entitlement
-  ): void => {
-    if (actorId === pair.operatorId && entitlement !== "respond_quote") {
-      return;
-    }
-
-    if (!hasEntitlement(actorId, grants, entitlement)) {
-      throw createDomainError(
-        "MISSING_ENTITLEMENT",
-        `Actor ${actorId} is missing ${entitlement} permission for pair ${pair.pairId}.`,
-        {
-          actorId,
-          entitlement,
-          pairId: pair.pairId
-        }
-      );
-    }
-  };
-
-  const registerPair = async (command: RegisterPairCommand): Promise<PairInstance> => {
-    const now = dependencies.clock.now().toISOString();
+  const createPair = async (command: CreatePairCommand): Promise<PairInstance> => {
+    const now = nowIso();
     const pair = createPairInstance({
       pairId: command.pairId ?? dependencies.idGenerator.nextId("pair"),
-      mode: command.mode,
+      mode: "SingleDealerPair",
       operatorId: command.operatorId,
-      dealers: command.dealers,
+      dealerId: command.dealerId,
       createdAt: now,
       operatorApproval: {
         status: "approved",
@@ -397,7 +290,7 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
       regulatoryAttestation: {
         status: "attested",
         attestedAt: now,
-        attestedBy: command.attestedBy ?? command.actorId,
+        attestedBy: command.actorId,
         jurisdiction: command.jurisdiction
       },
       rulebookRelease: {
@@ -408,15 +301,6 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
         summary: command.rulebookSummary
       }
     });
-
-    await ensureRiskApproved({
-      action: "register_pair",
-      actorId: command.actorId,
-      pair
-    });
-    await dependencies.ledger.savePair(pair);
-    await appendEvent("pair.registered", pair.pairId, pair.pairId, pair);
-
     const bootstrapGrants = [
       createAccessGrant({
         grantId: dependencies.idGenerator.nextId("grant"),
@@ -427,40 +311,39 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
         grantedBy: command.actorId,
         note: "bootstrap operator access"
       }),
-      ...pair.dealers.map((dealerId) =>
-        createAccessGrant({
-          grantId: dependencies.idGenerator.nextId("grant"),
-          pairId: pair.pairId,
-          subjectId: dealerId,
-          role: "dealer",
-          grantedAt: now,
-          grantedBy: command.actorId,
-          note: "bootstrap dealer access"
-        })
-      )
+      createAccessGrant({
+        grantId: dependencies.idGenerator.nextId("grant"),
+        pairId: pair.pairId,
+        subjectId: pair.dealerId,
+        role: "dealer",
+        grantedAt: now,
+        grantedBy: command.actorId,
+        note: "bootstrap dealer access"
+      })
     ];
+
+    await dependencies.ledger.savePair(pair);
 
     for (const grant of bootstrapGrants) {
       await dependencies.ledger.saveAccessGrant(grant);
-      await appendEvent("access.granted", pair.pairId, grant.grantId, grant);
+      await recordAudit(dependencies, {
+        action: "grant_access",
+        actorId: command.actorId,
+        at: now,
+        detail: `${grant.role} access granted to ${grant.subjectId}.`,
+        entityId: grant.grantId,
+        pairId: pair.pairId
+      });
     }
 
-    await dependencies.auditLog.record({
-      action: "register_pair",
+    await recordAudit(dependencies, {
+      action: "create_pair",
       actorId: command.actorId,
       at: now,
-      pairId: pair.pairId,
-      detail: `${pair.mode} registered with ${pair.dealers.length} dealer(s).`
+      detail: `SingleDealerPair ${pair.pairId} created with dealer ${pair.dealerId}.`,
+      entityId: pair.pairId,
+      pairId: pair.pairId
     });
-    await dependencies.notifications.send({
-      at: now,
-      kind: "pair_registered",
-      pairId: pair.pairId,
-      recipientIds: buildNotificationRecipients(bootstrapGrants, [pair.operatorId]),
-      subject: "Pair registered",
-      detail: `${pair.pairId} is active under operator ${pair.operatorId}.`
-    });
-    await refreshProjections(pair);
 
     return pair;
   };
@@ -470,14 +353,20 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
       requirePair(dependencies.ledger, command.pairId),
       dependencies.ledger.listAccessGrants(command.pairId)
     ]);
-    const now = dependencies.clock.now().toISOString();
+    const now = nowIso();
 
     ensureActorEntitled(pair, grants, command.actorId, "manage_access");
-    await ensureRiskApproved({
-      action: "grant_access",
-      actorId: command.actorId,
-      pair
-    });
+    if (command.role === "dealer" && command.subjectId !== pair.dealerId) {
+      throw createDomainError(
+        "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER",
+        `SingleDealerPair ${pair.pairId} already binds dealer ${pair.dealerId}.`,
+        {
+          pairId: pair.pairId,
+          dealerId: pair.dealerId,
+          subjectId: command.subjectId
+        }
+      );
+    }
 
     const grant = createAccessGrant({
       grantId: dependencies.idGenerator.nextId("grant"),
@@ -491,38 +380,26 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
     });
 
     await dependencies.ledger.saveAccessGrant(grant);
-    await appendEvent("access.granted", pair.pairId, grant.grantId, grant);
-    await dependencies.auditLog.record({
+    await recordAudit(dependencies, {
       action: "grant_access",
       actorId: command.actorId,
       at: now,
-      pairId: pair.pairId,
-      detail: `${command.role} granted to ${command.subjectId}.`
+      detail: `${command.role} access granted to ${command.subjectId}.`,
+      entityId: grant.grantId,
+      pairId: pair.pairId
     });
-    await dependencies.notifications.send({
-      at: now,
-      kind: "access_granted",
-      pairId: pair.pairId,
-      recipientIds: [command.subjectId],
-      subject: "Access granted",
-      detail: `${command.subjectId} now holds ${command.role} access for ${pair.pairId}.`
-    });
-    await refreshProjections(pair);
 
     return grant;
   };
 
   const pausePair = async (command: PausePairCommand): Promise<PairInstance> => {
-    const pair = await requirePair(dependencies.ledger, command.pairId);
-    const grants = await dependencies.ledger.listAccessGrants(pair.pairId);
-    const now = dependencies.clock.now().toISOString();
+    const [pair, grants] = await Promise.all([
+      requirePair(dependencies.ledger, command.pairId),
+      dependencies.ledger.listAccessGrants(command.pairId)
+    ]);
+    const now = nowIso();
 
     ensureActorEntitled(pair, grants, command.actorId, "pause_pair");
-    await ensureRiskApproved({
-      action: "pause_pair",
-      actorId: command.actorId,
-      pair
-    });
 
     const nextPair = setPairPauseState(pair, {
       state: command.state,
@@ -532,85 +409,95 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
     });
 
     await dependencies.ledger.savePair(nextPair);
-    await appendEvent("pair.pause-state.updated", pair.pairId, pair.pairId, nextPair.pauseState);
-    await dependencies.auditLog.record({
-      action: "pause_pair",
+    const detail =
+      command.state === "paused" && nextPair.pauseState.state === "paused"
+        ? `Pair paused: ${nextPair.pauseState.reason}.`
+        : "Pair reactivated.";
+
+    await recordAudit(dependencies, {
+      action: command.state === "paused" ? "pause_pair" : "unpause_pair",
       actorId: command.actorId,
       at: now,
-      pairId: pair.pairId,
-      detail:
-        nextPair.pauseState.state === "paused"
-          ? `Pair paused: ${nextPair.pauseState.reason}.`
-          : "Pair returned to active trading."
+      detail,
+      entityId: pair.pairId,
+      pairId: pair.pairId
     });
-    await dependencies.notifications.send({
-      at: now,
-      kind: "pair_pause_state_updated",
-      pairId: pair.pairId,
-      recipientIds: buildNotificationRecipients(grants, [pair.operatorId]),
-      subject: "Pair pause state updated",
-      detail:
-        command.state === "paused"
-          ? `${pair.pairId} paused by ${command.actorId}.`
-          : `${pair.pairId} reactivated by ${command.actorId}.`
-    });
-    await refreshProjections(nextPair);
 
     return nextPair;
   };
 
-  const submitRfq = async (command: SubmitRfqCommand): Promise<RFQ> => {
-    const pair = await requirePair(dependencies.ledger, command.pairId);
-    const grants = await dependencies.ledger.listAccessGrants(pair.pairId);
-
-    const rfq = createRfq({
+  const openRfq = async (command: OpenRfqCommand): Promise<RFQSession> => {
+    const [pair, grants] = await Promise.all([
+      requirePair(dependencies.ledger, command.pairId),
+      dependencies.ledger.listAccessGrants(command.pairId)
+    ]);
+    const now = nowIso();
+    const rfq = createRfqSession({
       rfqId: dependencies.idGenerator.nextId("rfq"),
       pair,
       accessGrants: grants,
-      requesterId: command.actorId,
-      directedDealerIds: command.directedDealerIds,
+      subscriberId: command.actorId,
       instrumentId: command.instrumentId,
       side: command.side,
       quantity: command.quantity,
-      createdAt: dependencies.clock.now().toISOString(),
-      expiresAt: command.expiresAt
+      createdAt: now
     });
 
-    await ensureRiskApproved({
-      action: "submit_rfq",
-      actorId: command.actorId,
-      pair,
-      quantity: command.quantity
-    });
     await dependencies.ledger.saveRfq(rfq);
-    await appendEvent("rfq.submitted", pair.pairId, rfq.rfqId, rfq);
-    await dependencies.auditLog.record({
-      action: "submit_rfq",
+    await recordAudit(dependencies, {
+      action: "open_rfq",
       actorId: command.actorId,
-      at: rfq.createdAt,
-      pairId: pair.pairId,
-      detail: `RFQ ${rfq.rfqId} submitted for ${rfq.quantity} units.`
+      at: now,
+      detail: `RFQ ${rfq.rfqId} opened for ${rfq.quantity} units.`,
+      entityId: rfq.rfqId,
+      pairId: pair.pairId
     });
-    await dependencies.notifications.send({
-      at: rfq.createdAt,
-      kind: "rfq_submitted",
-      pairId: pair.pairId,
-      recipientIds: rfq.directedDealerIds,
-      subject: "RFQ submitted",
-      detail: `RFQ ${rfq.rfqId} requires dealer response.`
-    });
-    await refreshProjections(pair);
 
     return rfq;
   };
 
-  const recordQuote = async (command: RecordQuoteCommand): Promise<Quote> => {
+  const rejectRfq = async (command: RejectRfqCommand): Promise<RFQSession> => {
     const [pair, rfq, grants] = await Promise.all([
       requirePair(dependencies.ledger, command.pairId),
       requireRfq(dependencies.ledger, command.rfqId),
       dependencies.ledger.listAccessGrants(command.pairId)
     ]);
-    const quote = createQuote({
+    const now = nowIso();
+
+    ensureActorEntitled(pair, grants, command.actorId, "respond_quote");
+    ensureDealerOwnsRfq(rfq, command.actorId);
+
+    const rejected = rejectRfqSession({
+      rfq,
+      rejectedAt: now,
+      rejectedBy: command.actorId,
+      ...(command.reason !== undefined ? { reason: command.reason } : {})
+    });
+
+    await dependencies.ledger.saveRfq(rejected);
+    await recordAudit(dependencies, {
+      action: "reject_rfq",
+      actorId: command.actorId,
+      at: now,
+      detail: `RFQ ${rfq.rfqId} rejected by dealer ${command.actorId}.`,
+      entityId: rfq.rfqId,
+      pairId: pair.pairId
+    });
+
+    return rejected;
+  };
+
+  const submitQuote = async (
+    command: SubmitQuoteCommand
+  ): Promise<{ quote: DealerQuote; rfq: RFQSession }> => {
+    const [pair, rfq, grants] = await Promise.all([
+      requirePair(dependencies.ledger, command.pairId),
+      requireRfq(dependencies.ledger, command.rfqId),
+      dependencies.ledger.listAccessGrants(command.pairId)
+    ]);
+    const now = nowIso();
+
+    const quote = createDealerQuote({
       quoteId: dependencies.idGenerator.nextId("quote"),
       pair,
       rfq,
@@ -618,255 +505,235 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
       dealerId: command.actorId,
       price: command.price,
       quantity: command.quantity,
-      createdAt: dependencies.clock.now().toISOString(),
+      createdAt: now,
       expiresAt: command.expiresAt
     });
+    const quotedRfq = markRfqQuoted(rfq, now);
 
-    await ensureRiskApproved({
-      action: "record_quote",
-      actorId: command.actorId,
-      pair,
-      price: command.price,
-      quantity: command.quantity
-    });
     await dependencies.ledger.saveQuote(quote);
-    await appendEvent("quote.recorded", pair.pairId, quote.quoteId, quote);
-    await dependencies.auditLog.record({
-      action: "record_quote",
+    await dependencies.ledger.saveRfq(quotedRfq);
+    await recordAudit(dependencies, {
+      action: "submit_quote",
       actorId: command.actorId,
-      at: quote.createdAt,
-      pairId: pair.pairId,
-      detail: `Quote ${quote.quoteId} recorded for RFQ ${rfq.rfqId}.`
+      at: now,
+      detail: `Quote ${quote.quoteId} submitted for RFQ ${rfq.rfqId}.`,
+      entityId: quote.quoteId,
+      pairId: pair.pairId
     });
-    await dependencies.notifications.send({
-      at: quote.createdAt,
-      kind: "quote_recorded",
-      pairId: pair.pairId,
-      recipientIds: [rfq.requesterId],
-      subject: "Quote recorded",
-      detail: `Quote ${quote.quoteId} is available for RFQ ${rfq.rfqId}.`
-    });
-    await refreshProjections(pair);
 
-    return quote;
+    return {
+      quote,
+      rfq: quotedRfq
+    };
   };
 
-  const executeQuote = async (command: ExecuteQuoteCommand): Promise<Execution> => {
-    const [pair, rfq, quote] = await Promise.all([
+  const cancelRfq = async (command: CancelRfqCommand): Promise<RFQSession> => {
+    const [pair, rfq, grants] = await Promise.all([
       requirePair(dependencies.ledger, command.pairId),
       requireRfq(dependencies.ledger, command.rfqId),
-      requireQuote(dependencies.ledger, command.quoteId)
-    ]);
-    const execution = createExecutionFromQuote({
-      executionId: dependencies.idGenerator.nextId("execution"),
-      pair,
-      quote,
-      rfq,
-      createdAt: dependencies.clock.now().toISOString()
-    });
-
-    await ensureRiskApproved({
-      action: "execute_quote",
-      actorId: command.actorId,
-      pair,
-      price: quote.price,
-      quantity: quote.quantity
-    });
-
-    const settlementStatus = await dependencies.settlement.submit(execution);
-    const finalExecution = transitionSettlementStatus(execution, settlementStatus);
-
-    await dependencies.ledger.saveExecution(finalExecution);
-    await appendEvent(
-      "execution.recorded",
-      pair.pairId,
-      finalExecution.executionId,
-      finalExecution
-    );
-    await dependencies.auditLog.record({
-      action: "execute_quote",
-      actorId: command.actorId,
-      at: finalExecution.createdAt,
-      pairId: pair.pairId,
-      detail: `Execution ${finalExecution.executionId} recorded with ${finalExecution.settlementStatus} settlement status.`
-    });
-    await dependencies.notifications.send({
-      at: finalExecution.createdAt,
-      kind: "execution_recorded",
-      pairId: pair.pairId,
-      recipientIds: [finalExecution.buyerId, finalExecution.sellerId],
-      subject: "Execution recorded",
-      detail: `Execution ${finalExecution.executionId} completed at ${finalExecution.price}.`
-    });
-    await refreshProjections(pair);
-
-    return finalExecution;
-  };
-
-  const submitDarkOrder = async (command: SubmitDarkOrderCommand): Promise<DarkOrder> => {
-    const [pair, grants] = await Promise.all([
-      requirePair(dependencies.ledger, command.pairId),
       dependencies.ledger.listAccessGrants(command.pairId)
     ]);
-    const order = createDarkOrder({
-      orderId: dependencies.idGenerator.nextId("order"),
-      pair,
-      accessGrants: grants,
-      participantId: command.actorId,
-      side: command.side,
-      quantity: command.quantity,
-      limitPrice: command.limitPrice,
-      createdAt: dependencies.clock.now().toISOString()
+    const now = nowIso();
+
+    ensureActorEntitled(pair, grants, command.actorId, "submit_rfq");
+    ensureSubscriberOwnsRfq(rfq, command.actorId);
+
+    const cancelled = cancelRfqSession(rfq, now, command.actorId);
+
+    await dependencies.ledger.saveRfq(cancelled);
+    await recordAudit(dependencies, {
+      action: "cancel_rfq",
+      actorId: command.actorId,
+      at: now,
+      detail: `RFQ ${rfq.rfqId} cancelled by subscriber ${command.actorId}.`,
+      entityId: rfq.rfqId,
+      pairId: pair.pairId
     });
 
-    await ensureRiskApproved({
-      action: "submit_dark_order",
-      actorId: command.actorId,
-      pair,
-      price: command.limitPrice,
-      quantity: command.quantity
-    });
-    await dependencies.ledger.saveDarkOrder(order);
-    await appendEvent("dark-order.submitted", pair.pairId, order.orderId, order);
-    await dependencies.auditLog.record({
-      action: "submit_dark_order",
-      actorId: command.actorId,
-      at: order.createdAt,
-      pairId: pair.pairId,
-      detail: `Dark order ${order.orderId} entered on the book.`
-    });
-    await refreshProjections(pair);
-
-    return order;
+    return cancelled;
   };
 
-  const proposeMatch = async (command: ProposeMatchCommand): Promise<MatchProposal> => {
-    const pair = await requirePair(dependencies.ledger, command.pairId);
-    const [buyOrder, sellOrder, referencePrice] = await Promise.all([
-      requireDarkOrder(dependencies.ledger, command.buyOrderId),
-      requireDarkOrder(dependencies.ledger, command.sellOrderId),
-      dependencies.referencePrices.get(command.pairId, command.instrumentId)
+  const acceptQuote = async (
+    command: AcceptQuoteCommand
+  ): Promise<{
+    executionTicket: ExecutionTicket;
+    quote: DealerQuote;
+    rfq: RFQSession;
+    settlementInstruction: SettlementInstruction;
+  }> => {
+    const [pair, rfq, quote, grants] = await Promise.all([
+      requirePair(dependencies.ledger, command.pairId),
+      requireRfq(dependencies.ledger, command.rfqId),
+      requireQuote(dependencies.ledger, command.quoteId),
+      dependencies.ledger.listAccessGrants(command.pairId)
     ]);
-    const proposal = createMatchProposal({
-      proposalId: dependencies.idGenerator.nextId("match"),
+    const now = nowIso();
+    const expiredQuote = expireDealerQuote(quote, now);
+
+    if (expiredQuote !== quote) {
+      await dependencies.ledger.saveQuote(expiredQuote);
+
+      if (rfq.status === "quoted") {
+        await dependencies.ledger.saveRfq(markRfqQuoteExpired(rfq, now));
+      }
+
+      await recordAudit(dependencies, {
+        action: "expire_quote",
+        actorId: quote.dealerId,
+        at: now,
+        detail: `Quote ${quote.quoteId} expired before acceptance.`,
+        entityId: quote.quoteId,
+        pairId: pair.pairId
+      });
+
+      throw createDomainError("QUOTE_EXPIRED", "Dealer quotes must be accepted before expiry.", {
+        pairId: pair.pairId,
+        quoteId: quote.quoteId
+      });
+    }
+
+    const accepted = acceptDealerQuote({
       pair,
-      buyOrder,
-      sellOrder,
-      proposedPrice: command.proposedPrice,
-      proposedQuantity: command.proposedQuantity,
-      referencePrice,
-      createdAt: dependencies.clock.now().toISOString()
+      rfq,
+      quote,
+      accessGrants: grants,
+      acceptedBy: command.actorId,
+      acceptedAt: now,
+      executionId: dependencies.idGenerator.nextId("execution"),
+      instructionId: dependencies.idGenerator.nextId("settlement")
     });
 
-    await ensureRiskApproved({
-      action: "propose_match",
+    await dependencies.ledger.saveRfq(accepted.rfq);
+    await dependencies.ledger.saveQuote(accepted.quote);
+    await dependencies.ledger.saveExecutionTicket(accepted.executionTicket);
+    await dependencies.ledger.saveSettlementInstruction(accepted.settlementInstruction);
+    await recordAudit(dependencies, {
+      action: "accept_quote",
       actorId: command.actorId,
-      pair,
-      price: command.proposedPrice,
-      quantity: command.proposedQuantity
+      at: now,
+      detail: `Quote ${accepted.quote.quoteId} accepted into execution ${accepted.executionTicket.executionId}.`,
+      entityId: accepted.executionTicket.executionId,
+      pairId: pair.pairId
     });
-    await dependencies.ledger.saveMatchProposal(proposal);
-    await appendEvent("match.proposed", pair.pairId, proposal.proposalId, proposal);
-    await dependencies.auditLog.record({
-      action: "propose_match",
-      actorId: command.actorId,
-      at: proposal.createdAt,
-      pairId: pair.pairId,
-      detail: `Match proposal ${proposal.proposalId} created from ${buyOrder.orderId}/${sellOrder.orderId}.`
-    });
-    await refreshProjections(pair);
 
-    return proposal;
+    return accepted;
   };
 
-  const getPairSummary = async (pairId: string): Promise<PairSummaryView | null> =>
-    (await dependencies.projections.get("pair-summary", pairId)) as PairSummaryView | null;
+  const markSettlementProgression = async (
+    command: MarkSettlementProgressionCommand
+  ): Promise<SettlementInstruction> => {
+    const [pair, grants, instruction] = await Promise.all([
+      requirePair(dependencies.ledger, command.pairId),
+      dependencies.ledger.listAccessGrants(command.pairId),
+      requireSettlementInstruction(dependencies.ledger, command.instructionId)
+    ]);
+    const now = nowIso();
 
-  const getTradingActivity = async (pairId: string): Promise<TradingActivityView | null> =>
-    (await dependencies.projections.get("activity", pairId)) as TradingActivityView | null;
+    ensureActorEntitled(pair, grants, command.actorId, "progress_settlement");
 
-  const getVenueHealth = async (pairId: string): Promise<VenueHealthReadModel | null> =>
-    (await dependencies.projections.get("health", pairId)) as VenueHealthReadModel | null;
+    const nextInstruction = progressSettlementInstruction(instruction, command.status, now);
 
-  const getPairDashboard = async (pairId: string): Promise<PairDashboardView | null> =>
-    (await dependencies.projections.get("dashboard", pairId)) as PairDashboardView | null;
+    await dependencies.ledger.saveSettlementInstruction(nextInstruction);
+    await recordAudit(dependencies, {
+      action: "mark_settlement_progression",
+      actorId: command.actorId,
+      at: now,
+      detail: `Settlement instruction ${instruction.instructionId} moved to ${command.status}.`,
+      entityId: instruction.instructionId,
+      pairId: pair.pairId
+    });
+
+    return nextInstruction;
+  };
+
+  const listPairs = async (): Promise<readonly PairInstance[]> => dependencies.ledger.listPairs();
+
+  const getOperatorView = async (pairId: string): Promise<OperatorView | null> => {
+    const pair = await dependencies.ledger.getPair(pairId);
+
+    if (pair === null) {
+      return null;
+    }
+
+    const snapshot = await loadPairSnapshot(dependencies, pairId);
+
+    return projectOperatorView(snapshot);
+  };
+
+  const getSubscriberView = async (
+    pairId: string,
+    subscriberId: string
+  ): Promise<SubscriberView | null> => {
+    const pair = await dependencies.ledger.getPair(pairId);
+
+    if (pair === null) {
+      return null;
+    }
+
+    const snapshot = await loadPairSnapshot(dependencies, pairId);
+
+    return projectSubscriberView({
+      ...snapshot,
+      subscriberId
+    });
+  };
+
+  const getDealerWorkbenchView = async (
+    pairId: string,
+    dealerId: string
+  ): Promise<DealerWorkbenchView | null> => {
+    const pair = await dependencies.ledger.getPair(pairId);
+
+    if (pair === null) {
+      return null;
+    }
+
+    const snapshot = await loadPairSnapshot(dependencies, pairId);
+
+    return projectDealerWorkbenchView({
+      pair: snapshot.pair,
+      rfqs: snapshot.rfqs,
+      quotes: snapshot.quotes,
+      executions: snapshot.executions,
+      dealerId
+    });
+  };
+
+  const getAuditTrail = async (pairId: string): Promise<AuditTrailView | null> => {
+    const pair = await dependencies.ledger.getPair(pairId);
+
+    if (pair === null) {
+      return null;
+    }
+
+    return projectAuditTrail(pairId, await dependencies.auditLog.list(pairId));
+  };
+
+  const getVenueHealth = async (pairId: string): Promise<VenueHealthReadModel | null> => {
+    const pair = await dependencies.ledger.getPair(pairId);
+
+    if (pair === null) {
+      return null;
+    }
+
+    return projectVenueHealth(pair, await dependencies.ledger.listAccessGrants(pairId));
+  };
 
   return {
-    registerPair,
+    createPair,
     grantAccess,
     pausePair,
-    submitRfq,
-    recordQuote,
-    executeQuote,
-    submitDarkOrder,
-    proposeMatch,
-    getPairSummary,
-    getTradingActivity,
-    getVenueHealth,
-    getPairDashboard
+    openRfq,
+    rejectRfq,
+    submitQuote,
+    cancelRfq,
+    acceptQuote,
+    markSettlementProgression,
+    listPairs,
+    getOperatorView,
+    getSubscriberView,
+    getDealerWorkbenchView,
+    getAuditTrail,
+    getVenueHealth
   };
 };
-
-export const buildVenueHealthReadModel = (draft: VenueConfigurationDraft): VenueHealthReadModel => {
-  const decision = evaluateVenueConfiguration(draft);
-  const previewDealers =
-    decision.normalized.mode === "SingleDealerPair"
-      ? [decision.normalized.dealers[0] ?? "draft-dealer"]
-      : decision.normalized.dealers.length > 0
-        ? decision.normalized.dealers
-        : ["draft-dealer-a"];
-  const previewPair = createPairInstance({
-    pairId: "draft-preview",
-    mode: decision.normalized.mode,
-    operatorId: decision.normalized.operatorId || "draft-operator",
-    dealers: previewDealers,
-    createdAt: "2026-04-02T00:00:00.000Z",
-    operatorApproval: {
-      status: "approved",
-      approvedAt: "2026-04-02T00:00:00.000Z",
-      approvedBy: "draft-operator"
-    },
-    regulatoryAttestation: {
-      status: "attested",
-      attestedAt: "2026-04-02T00:00:00.000Z",
-      attestedBy: "draft-operator",
-      jurisdiction: "draft"
-    },
-    rulebookRelease: {
-      releaseId: "draft-release",
-      version: "draft",
-      effectiveAt: "2026-04-02T00:00:00.000Z",
-      publishedBy: "draft-operator",
-      summary: "draft"
-    }
-  });
-  const previewHealth = projectVenueHealth(previewPair, []);
-
-  return {
-    title: `${decision.normalized.mode} bootstrap`,
-    status: decision.isValid ? "healthy" : "rejected",
-    detail: createDraftHealthDetail(decision.normalized, decision.violations.length),
-    summary: {
-      pairId: "draft-preview",
-      mode: decision.normalized.mode,
-      operatorId: decision.normalized.operatorId,
-      dealers: decision.normalized.dealers,
-      paused: false,
-      rulebookVersion: "draft",
-      activeParticipantCount:
-        decision.normalized.dealers.length + (decision.normalized.operatorId ? 1 : 0),
-      ledgerFacts: previewHealth.summary.ledgerFacts,
-      offLedgerFacts: previewHealth.summary.offLedgerFacts
-    },
-    violations: decision.violations.map((violation) => `${violation.code}: ${violation.message}`)
-  };
-};
-
-export const buildVenueHealthResponse = (
-  draft: VenueConfigurationDraft,
-  now: () => Date = () => new Date()
-): HealthResponse => ({
-  service: "venue-api",
-  generatedAt: now().toISOString(),
-  venue: buildVenueHealthReadModel(draft)
-});

@@ -1,7 +1,7 @@
-sdk-version: 0.0.0
-name: canton-dark-core
+sdk-version: 2.9.0
+name: canton-dark-daml-core
 version: 0.0.1
-source: .
+source: src
 dependencies:
   - daml-prim
   - daml-stdlib

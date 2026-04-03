@@ -2,29 +2,31 @@ import { describe, expect, it } from "vitest";
 
 import {
   createAccessGrant,
-  createDarkOrder,
-  createExecutionFromQuote,
-  createMatchProposal,
   createPairInstance,
-  createQuote,
-  createRfq
+  type AuditRecord,
+  type DealerQuote,
+  type ExecutionTicket,
+  type RFQSession,
+  type SettlementInstruction
 } from "@canton-dark/domain-core";
 
 import {
-  buildPairDashboardView,
+  projectAuditTrail,
+  projectDealerWorkbenchView,
+  projectOperatorView,
   projectPairSummary,
   projectParticipantAccess,
-  projectTradingActivity,
+  projectSubscriberView,
   projectVenueHealth
 } from "./index";
 
 const createdAt = "2026-04-02T00:00:00.000Z";
 
 const pair = createPairInstance({
-  pairId: "pair-ats",
-  mode: "ATSPair",
+  pairId: "pair-1",
+  mode: "SingleDealerPair",
   operatorId: "operator-1",
-  dealers: ["dealer-alpha", "dealer-beta"],
+  dealerId: "dealer-alpha",
   createdAt,
   operatorApproval: {
     status: "approved",
@@ -46,6 +48,22 @@ const pair = createPairInstance({
   }
 });
 
+const operatorGrant = createAccessGrant({
+  grantId: "grant-operator",
+  pairId: pair.pairId,
+  subjectId: pair.operatorId,
+  role: "operator",
+  grantedAt: createdAt,
+  grantedBy: "operator-1"
+});
+const dealerGrant = createAccessGrant({
+  grantId: "grant-dealer",
+  pairId: pair.pairId,
+  subjectId: pair.dealerId,
+  role: "dealer",
+  grantedAt: createdAt,
+  grantedBy: "operator-1"
+});
 const subscriberGrant = createAccessGrant({
   grantId: "grant-subscriber",
   pairId: pair.pairId,
@@ -54,99 +72,92 @@ const subscriberGrant = createAccessGrant({
   grantedAt: createdAt,
   grantedBy: "operator-1"
 });
-const dealerGrant = createAccessGrant({
-  grantId: "grant-dealer",
-  pairId: pair.pairId,
-  subjectId: "dealer-alpha",
-  role: "dealer",
-  grantedAt: createdAt,
-  grantedBy: "operator-1"
-});
-const rfq = createRfq({
+
+const rfq: RFQSession = {
   rfqId: "rfq-1",
-  pair,
-  accessGrants: [subscriberGrant, dealerGrant],
-  requesterId: "subscriber-1",
-  directedDealerIds: ["dealer-alpha"],
+  pairId: pair.pairId,
+  dealerId: pair.dealerId,
+  subscriberId: "subscriber-1",
   instrumentId: "CUSIP-1",
   side: "buy",
-  quantity: 50,
-  createdAt,
-  expiresAt: "2026-04-02T00:05:00.000Z"
-});
-const quote = createQuote({
-  quoteId: "quote-1",
-  pair,
-  rfq,
-  accessGrants: [subscriberGrant, dealerGrant],
-  dealerId: "dealer-alpha",
-  price: 100.5,
-  quantity: 50,
-  createdAt,
-  expiresAt: "2026-04-02T00:04:00.000Z"
-});
-const execution = createExecutionFromQuote({
-  executionId: "execution-1",
-  pair,
-  quote,
-  rfq,
-  createdAt
-});
-const buyOrder = createDarkOrder({
-  orderId: "buy-1",
-  pair,
-  accessGrants: [subscriberGrant],
-  participantId: "subscriber-1",
-  side: "buy",
-  quantity: 25,
-  limitPrice: 101,
-  createdAt
-});
-const sellGrant = createAccessGrant({
-  grantId: "grant-subscriber-2",
-  pairId: pair.pairId,
-  subjectId: "subscriber-2",
-  role: "subscriber",
-  grantedAt: createdAt,
-  grantedBy: "operator-1"
-});
-const sellOrder = createDarkOrder({
-  orderId: "sell-1",
-  pair,
-  accessGrants: [sellGrant],
-  participantId: "subscriber-2",
-  side: "sell",
-  quantity: 25,
-  limitPrice: 100,
-  createdAt
-});
-const match = createMatchProposal({
-  proposalId: "proposal-1",
-  pair,
-  buyOrder,
-  sellOrder,
-  proposedPrice: 100.5,
-  proposedQuantity: 25,
-  referencePrice: 100.5,
-  createdAt
-});
+  quantity: 10,
+  createdAt: "2026-04-02T00:01:00.000Z",
+  updatedAt: "2026-04-02T00:02:00.000Z",
+  status: "quoted"
+};
 
-describe("query model projectors", () => {
-  it("projects pair summaries and participant access views", () => {
+const quote: DealerQuote = {
+  quoteId: "quote-1",
+  pairId: pair.pairId,
+  rfqId: rfq.rfqId,
+  dealerId: pair.dealerId,
+  subscriberId: "subscriber-1",
+  price: 100.5,
+  quantity: 10,
+  createdAt: "2026-04-02T00:02:00.000Z",
+  expiresAt: "2026-04-02T00:05:00.000Z",
+  updatedAt: "2026-04-02T00:02:00.000Z",
+  status: "open"
+};
+
+const execution: ExecutionTicket = {
+  executionId: "execution-1",
+  pairId: pair.pairId,
+  rfqId: rfq.rfqId,
+  quoteId: quote.quoteId,
+  dealerId: pair.dealerId,
+  subscriberId: "subscriber-1",
+  instrumentId: rfq.instrumentId,
+  side: rfq.side,
+  quantity: quote.quantity,
+  price: quote.price,
+  acceptedAt: "2026-04-02T00:03:00.000Z"
+};
+
+const settlement: SettlementInstruction = {
+  instructionId: "instruction-1",
+  executionId: execution.executionId,
+  pairId: pair.pairId,
+  status: "pending",
+  createdAt: "2026-04-02T00:03:00.000Z",
+  updatedAt: "2026-04-02T00:03:00.000Z"
+};
+
+const auditTrail: AuditRecord[] = [
+  {
+    action: "open_rfq",
+    actorId: "subscriber-1",
+    at: "2026-04-02T00:01:00.000Z",
+    detail: "RFQ opened.",
+    entityId: rfq.rfqId,
+    pairId: pair.pairId
+  },
+  {
+    action: "create_pair",
+    actorId: "operator-1",
+    at: createdAt,
+    detail: "Pair created.",
+    entityId: pair.pairId,
+    pairId: pair.pairId
+  }
+];
+
+describe("query-model projectors", () => {
+  it("projects pair summaries, participant access, and venue health", () => {
     expect(projectPairSummary(pair)).toEqual({
-      pairId: "pair-ats",
-      mode: "ATSPair",
+      pairId: "pair-1",
+      mode: "SingleDealerPair",
       operatorId: "operator-1",
-      dealers: ["dealer-alpha", "dealer-beta"],
+      dealerId: "dealer-alpha",
       paused: false,
       rulebookVersion: "v1",
       approvalStatus: "approved",
       attestationStatus: "attested"
     });
     expect(
-      projectParticipantAccess(pair.pairId, [subscriberGrant, dealerGrant, sellGrant])
+      projectParticipantAccess(pair.pairId, [operatorGrant, dealerGrant, subscriberGrant])
     ).toEqual({
-      pairId: "pair-ats",
+      pairId: "pair-1",
       participants: [
         {
           subjectId: "dealer-alpha",
@@ -154,201 +165,546 @@ describe("query model projectors", () => {
           entitlements: ["respond_quote", "view_pair"]
         },
         {
-          subjectId: "subscriber-1",
-          roles: ["subscriber"],
-          entitlements: ["submit_dark_order", "submit_rfq", "view_pair"]
+          subjectId: "operator-1",
+          roles: ["operator"],
+          entitlements: [
+            "approve_pair",
+            "manage_access",
+            "pause_pair",
+            "progress_settlement",
+            "view_audit",
+            "view_pair"
+          ]
         },
         {
-          subjectId: "subscriber-2",
+          subjectId: "subscriber-1",
           roles: ["subscriber"],
-          entitlements: ["submit_dark_order", "submit_rfq", "view_pair"]
+          entitlements: ["accept_quote", "submit_rfq", "view_pair"]
         }
       ]
     });
+    expect(projectVenueHealth(pair, [operatorGrant, dealerGrant, subscriberGrant])).toEqual({
+      title: "SingleDealerPair health",
+      status: "healthy",
+      detail:
+        "Operator operator-1 oversees dealer dealer-alpha with 3 active participant grant(s).",
+      summary: {
+        pairId: "pair-1",
+        mode: "SingleDealerPair",
+        operatorId: "operator-1",
+        dealers: ["dealer-alpha"],
+        paused: false,
+        rulebookVersion: "v1",
+        activeParticipantCount: 3,
+        ledgerFacts: [
+          "Operator approvals",
+          "Rulebook releases",
+          "Access grants",
+          "RFQ sessions",
+          "Dealer quotes",
+          "Execution tickets",
+          "Settlement instructions"
+        ],
+        offLedgerFacts: [
+          "Operator query cache",
+          "Operator analytics",
+          "Telemetry projection",
+          "Transient UI state"
+        ]
+      },
+      violations: []
+    });
   });
 
-  it("projects trading activity into UI-facing views", () => {
+  it("projects operator, subscriber, dealer, and audit views with read-scope filtering", () => {
+    const rfqSameTime: RFQSession = {
+      ...rfq,
+      rfqId: "rfq-2",
+      instrumentId: "CUSIP-2"
+    };
+    const rfqLater: RFQSession = {
+      ...rfq,
+      rfqId: "rfq-3",
+      instrumentId: "CUSIP-3",
+      createdAt: "2026-04-02T00:04:00.000Z"
+    };
+    const quoteSameTime: DealerQuote = {
+      ...quote,
+      quoteId: "quote-2",
+      rfqId: "rfq-2"
+    };
+    const quoteLater: DealerQuote = {
+      ...quote,
+      quoteId: "quote-3",
+      rfqId: "rfq-3",
+      createdAt: "2026-04-02T00:04:00.000Z"
+    };
+    const executionSameTime: ExecutionTicket = {
+      ...execution,
+      executionId: "execution-2"
+    };
+    const executionLater: ExecutionTicket = {
+      ...execution,
+      executionId: "execution-3",
+      acceptedAt: "2026-04-02T00:04:00.000Z"
+    };
+
     expect(
-      projectTradingActivity(pair.pairId, {
-        rfqs: [rfq],
-        quotes: [quote],
-        executions: [execution],
-        darkOrders: [buyOrder, sellOrder],
-        matches: [match]
+      projectOperatorView({
+        pair,
+        grants: [operatorGrant, dealerGrant, subscriberGrant],
+        rfqs: [rfqLater, rfqSameTime, rfq],
+        quotes: [quoteLater, quoteSameTime, quote],
+        executions: [executionLater, executionSameTime, execution],
+        settlements: [settlement]
       })
     ).toEqual({
-      pairId: "pair-ats",
+      pair: projectPairSummary(pair),
+      access: projectParticipantAccess(pair.pairId, [operatorGrant, dealerGrant, subscriberGrant]),
       rfqs: [
         {
           rfqId: "rfq-1",
-          pairId: "pair-ats",
-          requesterId: "subscriber-1",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-1",
           side: "buy",
-          quantity: 50,
-          status: "open",
-          dealerCount: 1
+          quantity: 10,
+          status: "quoted",
+          createdAt: "2026-04-02T00:01:00.000Z"
+        },
+        {
+          rfqId: "rfq-2",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-2",
+          side: "buy",
+          quantity: 10,
+          status: "quoted",
+          createdAt: "2026-04-02T00:01:00.000Z"
+        },
+        {
+          rfqId: "rfq-3",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-3",
+          side: "buy",
+          quantity: 10,
+          status: "quoted",
+          createdAt: "2026-04-02T00:04:00.000Z"
         }
       ],
       quotes: [
         {
           quoteId: "quote-1",
-          pairId: "pair-ats",
+          rfqId: "rfq-1",
           dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
           price: 100.5,
-          quantity: 50,
-          status: "active"
-        }
-      ],
-      executions: [
-        {
-          executionId: "execution-1",
-          pairId: "pair-ats",
-          buyerId: "subscriber-1",
-          sellerId: "dealer-alpha",
-          price: 100.5,
-          quantity: 50,
-          settlementStatus: "pending",
-          source: "rfq"
-        }
-      ],
-      darkOrders: [
-        {
-          orderId: "buy-1",
-          pairId: "pair-ats",
-          participantId: "subscriber-1",
-          side: "buy",
-          quantity: 25,
-          limitPrice: 101,
-          status: "resting"
+          quantity: 10,
+          expiresAt: "2026-04-02T00:05:00.000Z",
+          status: "open",
+          createdAt: "2026-04-02T00:02:00.000Z"
         },
         {
-          orderId: "sell-1",
-          pairId: "pair-ats",
-          participantId: "subscriber-2",
-          side: "sell",
-          quantity: 25,
-          limitPrice: 100,
-          status: "resting"
+          quoteId: "quote-2",
+          rfqId: "rfq-2",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 10,
+          expiresAt: "2026-04-02T00:05:00.000Z",
+          status: "open",
+          createdAt: "2026-04-02T00:02:00.000Z"
+        },
+        {
+          quoteId: "quote-3",
+          rfqId: "rfq-3",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 10,
+          expiresAt: "2026-04-02T00:05:00.000Z",
+          status: "open",
+          createdAt: "2026-04-02T00:04:00.000Z"
         }
       ],
-      matches: [
+      executions: [execution, executionSameTime, executionLater],
+      settlements: [
         {
-          proposalId: "proposal-1",
-          pairId: "pair-ats",
-          proposedPrice: 100.5,
-          proposedQuantity: 25,
-          referencePrice: 100.5,
-          status: "proposed"
+          instructionId: "instruction-1",
+          executionId: "execution-1",
+          status: "pending",
+          createdAt: "2026-04-02T00:03:00.000Z",
+          updatedAt: "2026-04-02T00:03:00.000Z"
         }
-      ]
-    });
-    expect(projectTradingActivity(pair.pairId, {})).toEqual({
-      pairId: "pair-ats",
-      rfqs: [],
-      quotes: [],
-      executions: [],
-      darkOrders: [],
-      matches: []
-    });
-  });
-
-  it("projects venue health and aggregates a pair dashboard", () => {
-    expect(projectVenueHealth(pair, [subscriberGrant, dealerGrant])).toEqual({
-      title: "ATSPair kernel health",
-      status: "healthy",
-      detail:
-        "Operator operator-1 governs 2 dealer perimeter(s) and 2 active participant grant(s).",
-      summary: {
-        pairId: "pair-ats",
-        mode: "ATSPair",
-        operatorId: "operator-1",
-        dealers: ["dealer-alpha", "dealer-beta"],
-        paused: false,
-        rulebookVersion: "v1",
-        activeParticipantCount: 2,
-        ledgerFacts: ["Shared RFQ state", "Shared execution state"],
-        offLedgerFacts: [
-          "Operator query cache",
-          "Operator analytics",
-          "Telemetry projection",
-          "Transient UI state"
-        ]
-      },
-      violations: []
-    });
-
-    const pausedPair = createPairInstance({
-      ...pair,
-      pauseState: {
-        state: "paused",
-        changedAt: "2026-04-02T00:03:00.000Z",
-        changedBy: "operator-1",
-        reason: "supervisory hold"
-      }
-    });
-
-    expect(projectVenueHealth(pausedPair, [subscriberGrant])).toEqual({
-      title: "ATSPair kernel health",
-      status: "paused",
-      detail: "Pair paused by operator-1: supervisory hold.",
-      summary: {
-        pairId: "pair-ats",
-        mode: "ATSPair",
-        operatorId: "operator-1",
-        dealers: ["dealer-alpha", "dealer-beta"],
-        paused: true,
-        rulebookVersion: "v1",
-        activeParticipantCount: 1,
-        ledgerFacts: ["Shared RFQ state", "Shared execution state"],
-        offLedgerFacts: [
-          "Operator query cache",
-          "Operator analytics",
-          "Telemetry projection",
-          "Transient UI state"
-        ]
-      },
-      violations: []
-    });
-    expect(projectVenueHealth(pair, [subscriberGrant], ["PAIR_IS_PAUSED"])).toEqual({
-      title: "ATSPair kernel health",
-      status: "rejected",
-      detail: "1 venue policy issue(s) require remediation before trading can resume.",
-      summary: {
-        pairId: "pair-ats",
-        mode: "ATSPair",
-        operatorId: "operator-1",
-        dealers: ["dealer-alpha", "dealer-beta"],
-        paused: false,
-        rulebookVersion: "v1",
-        activeParticipantCount: 1,
-        ledgerFacts: ["Shared RFQ state", "Shared execution state"],
-        offLedgerFacts: [
-          "Operator query cache",
-          "Operator analytics",
-          "Telemetry projection",
-          "Transient UI state"
-        ]
-      },
-      violations: ["PAIR_IS_PAUSED"]
+      ],
+      health: projectVenueHealth(pair, [operatorGrant, dealerGrant, subscriberGrant])
     });
 
     expect(
-      buildPairDashboardView({
+      projectSubscriberView({
         pair,
-        grants: [subscriberGrant, dealerGrant],
-        records: {
-          rfqs: [rfq],
-          quotes: [quote]
-        }
+        grants: [operatorGrant, dealerGrant, subscriberGrant],
+        rfqs: [rfqLater, rfqSameTime, rfq],
+        quotes: [quoteLater, quoteSameTime, quote],
+        executions: [executionLater, executionSameTime, execution],
+        settlements: [settlement],
+        subscriberId: "subscriber-1"
       })
     ).toEqual({
       pair: projectPairSummary(pair),
-      access: projectParticipantAccess(pair.pairId, [subscriberGrant, dealerGrant]),
-      activity: projectTradingActivity(pair.pairId, {
+      subscriberId: "subscriber-1",
+      entitlements: ["accept_quote", "submit_rfq", "view_pair"],
+      canOpenRfq: true,
+      rfqs: [
+        {
+          rfqId: "rfq-1",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-1",
+          side: "buy",
+          quantity: 10,
+          status: "quoted",
+          createdAt: "2026-04-02T00:01:00.000Z"
+        },
+        {
+          rfqId: "rfq-2",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-2",
+          side: "buy",
+          quantity: 10,
+          status: "quoted",
+          createdAt: "2026-04-02T00:01:00.000Z"
+        },
+        {
+          rfqId: "rfq-3",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-3",
+          side: "buy",
+          quantity: 10,
+          status: "quoted",
+          createdAt: "2026-04-02T00:04:00.000Z"
+        }
+      ],
+      quotes: [
+        {
+          quoteId: "quote-1",
+          rfqId: "rfq-1",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 10,
+          expiresAt: "2026-04-02T00:05:00.000Z",
+          status: "open",
+          createdAt: "2026-04-02T00:02:00.000Z"
+        },
+        {
+          quoteId: "quote-2",
+          rfqId: "rfq-2",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 10,
+          expiresAt: "2026-04-02T00:05:00.000Z",
+          status: "open",
+          createdAt: "2026-04-02T00:02:00.000Z"
+        },
+        {
+          quoteId: "quote-3",
+          rfqId: "rfq-3",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 10,
+          expiresAt: "2026-04-02T00:05:00.000Z",
+          status: "open",
+          createdAt: "2026-04-02T00:04:00.000Z"
+        }
+      ],
+      executions: [execution, executionSameTime, executionLater],
+      settlements: [
+        {
+          instructionId: "instruction-1",
+          executionId: "execution-1",
+          status: "pending",
+          createdAt: "2026-04-02T00:03:00.000Z",
+          updatedAt: "2026-04-02T00:03:00.000Z"
+        }
+      ]
+    });
+
+    expect(
+      projectDealerWorkbenchView({
+        pair,
+        dealerId: "dealer-alpha",
+        rfqs: [rfqLater, rfqSameTime, rfq],
+        quotes: [quoteLater, quoteSameTime, quote],
+        executions: [executionLater, executionSameTime, execution]
+      })
+    ).toEqual({
+      pair: projectPairSummary(pair),
+      dealerId: "dealer-alpha",
+      rfqs: [
+        {
+          rfqId: "rfq-1",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-1",
+          side: "buy",
+          quantity: 10,
+          status: "quoted",
+          createdAt: "2026-04-02T00:01:00.000Z"
+        },
+        {
+          rfqId: "rfq-2",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-2",
+          side: "buy",
+          quantity: 10,
+          status: "quoted",
+          createdAt: "2026-04-02T00:01:00.000Z"
+        },
+        {
+          rfqId: "rfq-3",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          instrumentId: "CUSIP-3",
+          side: "buy",
+          quantity: 10,
+          status: "quoted",
+          createdAt: "2026-04-02T00:04:00.000Z"
+        }
+      ],
+      quotes: [
+        {
+          quoteId: "quote-1",
+          rfqId: "rfq-1",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 10,
+          expiresAt: "2026-04-02T00:05:00.000Z",
+          status: "open",
+          createdAt: "2026-04-02T00:02:00.000Z"
+        },
+        {
+          quoteId: "quote-2",
+          rfqId: "rfq-2",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 10,
+          expiresAt: "2026-04-02T00:05:00.000Z",
+          status: "open",
+          createdAt: "2026-04-02T00:02:00.000Z"
+        },
+        {
+          quoteId: "quote-3",
+          rfqId: "rfq-3",
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          price: 100.5,
+          quantity: 10,
+          expiresAt: "2026-04-02T00:05:00.000Z",
+          status: "open",
+          createdAt: "2026-04-02T00:04:00.000Z"
+        }
+      ],
+      executions: [execution, executionSameTime, executionLater]
+    });
+
+    expect(
+      projectAuditTrail(pair.pairId, [
+        ...auditTrail,
+        {
+          action: "accept_quote",
+          actorId: "subscriber-1",
+          at: createdAt,
+          detail: "Quote accepted.",
+          entityId: quote.quoteId,
+          pairId: pair.pairId
+        }
+      ])
+    ).toEqual({
+      pairId: "pair-1",
+      entries: [
+        {
+          action: "accept_quote",
+          actorId: "subscriber-1",
+          at: "2026-04-02T00:00:00.000Z",
+          detail: "Quote accepted.",
+          entityId: "quote-1",
+          pairId: "pair-1"
+        },
+        {
+          action: "create_pair",
+          actorId: "operator-1",
+          at: "2026-04-02T00:00:00.000Z",
+          detail: "Pair created.",
+          entityId: "pair-1",
+          pairId: "pair-1"
+        },
+        {
+          action: "open_rfq",
+          actorId: "subscriber-1",
+          at: "2026-04-02T00:01:00.000Z",
+          detail: "RFQ opened.",
+          entityId: "rfq-1",
+          pairId: "pair-1"
+        }
+      ]
+    });
+
+    expect(
+      projectSubscriberView({
+        pair,
+        grants: [operatorGrant, dealerGrant, subscriberGrant],
         rfqs: [rfq],
-        quotes: [quote]
-      }),
-      health: projectVenueHealth(pair, [subscriberGrant, dealerGrant], [])
+        quotes: [quote],
+        executions: [execution],
+        settlements: [settlement],
+        subscriberId: "subscriber-2"
+      })
+    ).toEqual({
+      pair: projectPairSummary(pair),
+      subscriberId: "subscriber-2",
+      entitlements: [],
+      canOpenRfq: false,
+      rfqs: [],
+      quotes: [],
+      executions: [],
+      settlements: []
+    });
+  });
+
+  it("projects paused and rejected health branches", () => {
+    const pausedPair = createPairInstance({
+      ...pair,
+      createdAt,
+      pauseState: {
+        state: "paused",
+        changedAt: "2026-04-02T00:10:00.000Z",
+        changedBy: "operator-1",
+        reason: "manual hold"
+      }
+    });
+
+    expect(projectVenueHealth(pausedPair, [operatorGrant])).toEqual({
+      title: "SingleDealerPair health",
+      status: "paused",
+      detail: "Pair paused by operator-1: manual hold.",
+      summary: {
+        pairId: "pair-1",
+        mode: "SingleDealerPair",
+        operatorId: "operator-1",
+        dealers: ["dealer-alpha"],
+        paused: true,
+        rulebookVersion: "v1",
+        activeParticipantCount: 1,
+        ledgerFacts: [
+          "Operator approvals",
+          "Rulebook releases",
+          "Access grants",
+          "RFQ sessions",
+          "Dealer quotes",
+          "Execution tickets",
+          "Settlement instructions"
+        ],
+        offLedgerFacts: [
+          "Operator query cache",
+          "Operator analytics",
+          "Telemetry projection",
+          "Transient UI state"
+        ]
+      },
+      violations: []
+    });
+
+    expect(
+      projectVenueHealth(
+        {
+          ...pair,
+          operatorApproval: {
+            ...pair.operatorApproval,
+            status: "rejected"
+          }
+        },
+        [operatorGrant]
+      )
+    ).toEqual({
+      title: "SingleDealerPair health",
+      status: "rejected",
+      detail: "1 venue policy issue(s) require remediation before new trading activity.",
+      summary: {
+        pairId: "pair-1",
+        mode: "SingleDealerPair",
+        operatorId: "operator-1",
+        dealers: ["dealer-alpha"],
+        paused: false,
+        rulebookVersion: "v1",
+        activeParticipantCount: 1,
+        ledgerFacts: [
+          "Operator approvals",
+          "Rulebook releases",
+          "Access grants",
+          "RFQ sessions",
+          "Dealer quotes",
+          "Execution tickets",
+          "Settlement instructions"
+        ],
+        offLedgerFacts: [
+          "Operator query cache",
+          "Operator analytics",
+          "Telemetry projection",
+          "Transient UI state"
+        ]
+      },
+      violations: ["Operator approval is not active."]
+    });
+
+    expect(
+      projectVenueHealth(
+        {
+          ...pair,
+          regulatoryAttestation: {
+            ...pair.regulatoryAttestation,
+            status: "expired"
+          }
+        },
+        [operatorGrant]
+      )
+    ).toEqual({
+      title: "SingleDealerPair health",
+      status: "rejected",
+      detail: "1 venue policy issue(s) require remediation before new trading activity.",
+      summary: {
+        pairId: "pair-1",
+        mode: "SingleDealerPair",
+        operatorId: "operator-1",
+        dealers: ["dealer-alpha"],
+        paused: false,
+        rulebookVersion: "v1",
+        activeParticipantCount: 1,
+        ledgerFacts: [
+          "Operator approvals",
+          "Rulebook releases",
+          "Access grants",
+          "RFQ sessions",
+          "Dealer quotes",
+          "Execution tickets",
+          "Settlement instructions"
+        ],
+        offLedgerFacts: [
+          "Operator query cache",
+          "Operator analytics",
+          "Telemetry projection",
+          "Transient UI state"
+        ]
+      },
+      violations: ["Regulatory attestation is not active."]
     });
   });
 });

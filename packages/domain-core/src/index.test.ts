@@ -2,28 +2,31 @@ import { describe, expect, it } from "vitest";
 
 import {
   DomainError,
+  acceptDealerQuote,
   assertInvariant,
-  assertTradingAllowed,
-  classifyFactLocation,
+  assertPairActive,
+  cancelRfqSession,
   createAccessGrant,
-  createDarkOrder,
+  createDealerQuote,
   createDomainError,
-  createExecutionFromQuote,
-  createMatchProposal,
   createPairInstance,
-  createQuote,
-  createRfq,
-  evaluateVenueConfiguration,
+  createRfqSession,
+  expireDealerQuote,
   getRoleEntitlements,
   hasEntitlement,
   isGrantActive,
-  isUserFacingLabelAllowed,
+  markRfqQuoteExpired,
+  markRfqQuoted,
+  progressSettlementInstruction,
+  rejectRfqSession,
   resolveEntitlements,
   revokeAccessGrant,
   setPairPauseState,
-  transitionSettlementStatus,
   type AccessGrant,
-  type PairInstance
+  type DealerQuote,
+  type PairInstance,
+  type RFQSession,
+  type SettlementInstruction
 } from "./index";
 
 const createdAt = "2026-04-02T00:00:00.000Z";
@@ -33,7 +36,7 @@ const buildPair = (overrides: Partial<PairInstance> = {}): PairInstance =>
     pairId: "pair-001",
     mode: "SingleDealerPair",
     operatorId: "operator-1",
-    dealers: [" dealer-alpha ", "dealer-alpha"],
+    dealerId: " dealer-alpha ",
     createdAt,
     operatorApproval: {
       status: "approved",
@@ -71,13 +74,57 @@ const buildGrant = (overrides: Partial<AccessGrant> = {}): AccessGrant =>
     ...overrides
   });
 
-describe("pair and entitlement rules", () => {
-  it("creates a valid pair instance with normalized fields and default active pause state", () => {
+const buildRfq = (overrides: Partial<RFQSession> = {}): RFQSession => ({
+  rfqId: "rfq-001",
+  pairId: "pair-001",
+  dealerId: "dealer-alpha",
+  subscriberId: "subscriber-1",
+  instrumentId: "CUSIP-1",
+  side: "buy",
+  quantity: 25,
+  createdAt,
+  updatedAt: createdAt,
+  status: "open",
+  ...overrides
+});
+
+const buildQuote = (overrides: Partial<DealerQuote> = {}): DealerQuote => ({
+  quoteId: "quote-001",
+  pairId: "pair-001",
+  rfqId: "rfq-001",
+  dealerId: "dealer-alpha",
+  subscriberId: "subscriber-1",
+  price: 101.25,
+  quantity: 25,
+  createdAt,
+  expiresAt: "2026-04-02T00:05:00.000Z",
+  updatedAt: createdAt,
+  status: "open",
+  ...overrides
+});
+
+describe("phase 1 domain-core rules", () => {
+  it("constructs domain errors and invariant helpers with optional context", () => {
+    const withContext = createDomainError("EMPTY_IDENTIFIER", "boom", { field: "pairId" });
+    const withoutContext = createDomainError("EMPTY_IDENTIFIER", "boom");
+
+    expect(withContext).toBeInstanceOf(DomainError);
+    expect(withContext.context).toEqual({ field: "pairId" });
+    expect(withoutContext.context).toBeUndefined();
+    expect(() => assertInvariant(false, "EMPTY_IDENTIFIER", "broken")).toThrow(
+      expect.objectContaining({
+        code: "EMPTY_IDENTIFIER"
+      })
+    );
+    expect(() => assertInvariant(true, "EMPTY_IDENTIFIER", "ok")).not.toThrow();
+  });
+
+  it("creates a valid pair instance with normalized fields and pause state branches", () => {
     expect(buildPair()).toEqual({
       pairId: "pair-001",
       mode: "SingleDealerPair",
       operatorId: "operator-1",
-      dealers: ["dealer-alpha"],
+      dealerId: "dealer-alpha",
       createdAt,
       updatedAt: createdAt,
       operatorApproval: {
@@ -105,6 +152,36 @@ describe("pair and entitlement rules", () => {
         changedBy: "operator-1"
       }
     });
+
+    expect(
+      buildPair({
+        pauseState: {
+          state: "paused",
+          changedAt: "2026-04-02T00:01:00.000Z",
+          changedBy: "operator-1",
+          reason: "manual hold"
+        }
+      }).pauseState
+    ).toEqual({
+      state: "paused",
+      changedAt: "2026-04-02T00:01:00.000Z",
+      changedBy: "operator-1",
+      reason: "manual hold"
+    });
+
+    expect(
+      buildPair({
+        pauseState: {
+          state: "active",
+          changedAt: "2026-04-02T00:02:00.000Z",
+          changedBy: "operator-1"
+        }
+      }).pauseState
+    ).toEqual({
+      state: "active",
+      changedAt: "2026-04-02T00:02:00.000Z",
+      changedBy: "operator-1"
+    });
   });
 
   it("rejects invalid pair activation inputs", () => {
@@ -113,39 +190,35 @@ describe("pair and entitlement rules", () => {
         pairId: " ",
         mode: "SingleDealerPair",
         operatorId: " ",
-        dealers: ["dealer-alpha", "dealer-beta"],
+        dealerId: " ",
         createdAt,
         operatorApproval: {
-          status: "rejected",
+          status: "approved",
           approvedAt: createdAt,
           approvedBy: "operator-1"
         },
         regulatoryAttestation: {
-          status: "expired",
+          status: "attested",
           attestedAt: createdAt,
           attestedBy: "auditor-1",
           jurisdiction: "US"
         },
         rulebookRelease: {
-          releaseId: " ",
-          version: " ",
+          releaseId: "rulebook-1",
+          version: "v1",
           effectiveAt: createdAt,
           publishedBy: "operator-1",
-          summary: " "
+          summary: "initial"
         }
       })
-    ).toThrow(
-      expect.objectContaining({
-        code: "EMPTY_IDENTIFIER"
-      })
-    );
+    ).toThrow(expect.objectContaining({ code: "EMPTY_IDENTIFIER" }));
 
     expect(() =>
       createPairInstance({
         pairId: "pair-002",
         mode: "SingleDealerPair",
         operatorId: "operator-1",
-        dealers: ["dealer-alpha", "dealer-beta"],
+        dealerId: "",
         createdAt,
         operatorApproval: {
           status: "approved",
@@ -166,21 +239,17 @@ describe("pair and entitlement rules", () => {
           summary: "initial"
         }
       })
-    ).toThrow(
-      expect.objectContaining({
-        code: "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER"
-      })
-    );
+    ).toThrow(expect.objectContaining({ code: "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER" }));
 
     expect(() =>
       createPairInstance({
         pairId: "pair-003",
-        mode: "ATSPair",
+        mode: "SingleDealerPair",
         operatorId: "operator-1",
-        dealers: [],
+        dealerId: "dealer-alpha",
         createdAt,
         operatorApproval: {
-          status: "approved",
+          status: "rejected",
           approvedAt: createdAt,
           approvedBy: "operator-1"
         },
@@ -196,25 +265,44 @@ describe("pair and entitlement rules", () => {
           effectiveAt: createdAt,
           publishedBy: "operator-1",
           summary: "initial"
-        },
-        pauseState: {
-          state: "paused",
-          changedAt: createdAt,
-          changedBy: "operator-1",
-          reason: "  "
         }
       })
-    ).toThrow(
-      expect.objectContaining({
-        code: "ATS_PAIR_REQUIRES_AT_LEAST_ONE_DIRECTED_DEALER"
-      })
-    );
-    expect(
+    ).toThrow(expect.objectContaining({ code: "PAIR_APPROVAL_REQUIRED" }));
+
+    expect(() =>
       createPairInstance({
         pairId: "pair-004",
-        mode: "ATSPair",
+        mode: "SingleDealerPair",
         operatorId: "operator-1",
-        dealers: ["dealer-alpha"],
+        dealerId: "dealer-alpha",
+        createdAt,
+        operatorApproval: {
+          status: "approved",
+          approvedAt: createdAt,
+          approvedBy: "operator-1"
+        },
+        regulatoryAttestation: {
+          status: "expired",
+          attestedAt: createdAt,
+          attestedBy: "auditor-1",
+          jurisdiction: "US"
+        },
+        rulebookRelease: {
+          releaseId: "rulebook-4",
+          version: "v1",
+          effectiveAt: createdAt,
+          publishedBy: "operator-1",
+          summary: "initial"
+        }
+      })
+    ).toThrow(expect.objectContaining({ code: "PAIR_REGULATORY_ATTESTATION_REQUIRED" }));
+
+    expect(() =>
+      createPairInstance({
+        pairId: "pair-005",
+        mode: "SingleDealerPair",
+        operatorId: "operator-1",
+        dealerId: "dealer-alpha",
         createdAt,
         operatorApproval: {
           status: "approved",
@@ -228,7 +316,7 @@ describe("pair and entitlement rules", () => {
           jurisdiction: "US"
         },
         rulebookRelease: {
-          releaseId: "rulebook-4",
+          releaseId: " ",
           version: "v1",
           effectiveAt: createdAt,
           publishedBy: "operator-1",
@@ -236,17 +324,12 @@ describe("pair and entitlement rules", () => {
         },
         pauseState: {
           state: "paused",
-          changedAt: "2026-04-02T00:01:00.000Z",
+          changedAt: createdAt,
           changedBy: "operator-1",
-          reason: "manual block"
+          reason: " "
         }
-      }).pauseState
-    ).toEqual({
-      state: "paused",
-      changedAt: "2026-04-02T00:01:00.000Z",
-      changedBy: "operator-1",
-      reason: "manual block"
-    });
+      })
+    ).toThrow(expect.objectContaining({ code: "INVALID_RULEBOOK_RELEASE" }));
   });
 
   it("creates, revokes, and resolves access entitlements monotonically", () => {
@@ -259,438 +342,626 @@ describe("pair and entitlement rules", () => {
       grantedBy: "operator-1",
       note: " bootstrap "
     });
-    const extraGrant = buildGrant({
-      grantId: "grant-extra",
-      entitlements: ["submit_rfq", "view_audit"]
+    const subscriberGrant = buildGrant();
+    const delegatedSettlementGrant = createAccessGrant({
+      grantId: "grant-settlement",
+      pairId: "pair-001",
+      subjectId: "subscriber-1",
+      role: "settlement_delegate",
+      grantedAt: createdAt,
+      grantedBy: "operator-1",
+      entitlements: ["view_audit"]
     });
-    const revoked = revokeAccessGrant(extraGrant, "2026-04-02T00:01:00.000Z", "operator-1");
-
-    expect(getRoleEntitlements("auditor")).toEqual(["view_audit", "view_pair"]);
-    expect(operatorGrant.note).toBe("bootstrap");
-    expect(resolveEntitlements("operator-1", [operatorGrant])).toEqual([
-      "approve_pair",
-      "manage_access",
-      "pause_pair",
-      "view_audit",
-      "view_pair"
-    ]);
-    expect(resolveEntitlements("subscriber-1", [extraGrant, revoked])).toEqual([
-      "submit_dark_order",
-      "submit_rfq",
-      "view_audit",
-      "view_pair"
-    ]);
-    expect(hasEntitlement("subscriber-1", [extraGrant], "submit_dark_order")).toBe(true);
-    expect(hasEntitlement("subscriber-1", [revoked], "submit_dark_order")).toBe(false);
-    expect(isGrantActive(extraGrant)).toBe(true);
-    expect(isGrantActive(revoked)).toBe(false);
-  });
-
-  it("throws typed errors via the invariant helpers", () => {
-    const customError = createDomainError("PAIR_OPERATOR_REQUIRED", "operator missing", {
-      operatorId: " "
-    });
-    const bareError = createDomainError("EMPTY_IDENTIFIER", "missing");
-
-    expect(customError).toBeInstanceOf(DomainError);
-    expect(customError.context).toEqual({ operatorId: " " });
-    expect(bareError.context).toBeUndefined();
-    expect(() =>
-      assertInvariant(false, "PAIR_OPERATOR_REQUIRED", "operator missing", { operatorId: " " })
-    ).toThrow(customError);
-  });
-});
-
-describe("pause and trading lifecycle rules", () => {
-  it("updates pause state and blocks trading while paused", () => {
-    const pair = buildPair();
-    const pausedPair = setPairPauseState(pair, {
-      state: "paused",
-      changedAt: "2026-04-02T00:05:00.000Z",
-      changedBy: "operator-1",
-      reason: "volatile conditions"
-    });
-
-    expect(pausedPair.pauseState).toEqual({
-      state: "paused",
-      changedAt: "2026-04-02T00:05:00.000Z",
-      changedBy: "operator-1",
-      reason: "volatile conditions"
-    });
-    expect(pausedPair.updatedAt).toBe("2026-04-02T00:05:00.000Z");
-    expect(() => assertTradingAllowed(pausedPair)).toThrow(
-      expect.objectContaining({
-        code: "PAIR_IS_PAUSED"
-      })
+    const revokedSettlementGrant = revokeAccessGrant(
+      delegatedSettlementGrant,
+      "2026-04-02T00:02:00.000Z",
+      "operator-1"
     );
+
+    expect(operatorGrant.note).toBe("bootstrap");
+    expect(getRoleEntitlements("subscriber")).toEqual(["accept_quote", "submit_rfq", "view_pair"]);
+    expect(buildGrant({ note: "" }).note).toBeUndefined();
+    expect(isGrantActive(revokedSettlementGrant)).toBe(false);
     expect(
-      setPairPauseState(pausedPair, {
-        state: "active",
-        changedAt: "2026-04-02T00:06:00.000Z",
-        changedBy: "operator-1"
-      }).pauseState
-    ).toEqual({
+      resolveEntitlements("subscriber-1", [subscriberGrant, delegatedSettlementGrant])
+    ).toEqual(["accept_quote", "progress_settlement", "submit_rfq", "view_audit", "view_pair"]);
+    expect(resolveEntitlements("subscriber-1", [subscriberGrant, revokedSettlementGrant])).toEqual([
+      "accept_quote",
+      "submit_rfq",
+      "view_pair"
+    ]);
+    expect(hasEntitlement("subscriber-1", [subscriberGrant], "submit_rfq")).toBe(true);
+    expect(hasEntitlement("subscriber-1", [subscriberGrant], "respond_quote")).toBe(false);
+  });
+
+  it("updates pair pause state and blocks trading while paused", () => {
+    const pair = buildPair();
+    const paused = setPairPauseState(pair, {
+      state: "paused",
+      changedAt: "2026-04-02T00:03:00.000Z",
+      changedBy: "operator-1",
+      reason: "manual review"
+    });
+    const reactivated = setPairPauseState(paused, {
       state: "active",
-      changedAt: "2026-04-02T00:06:00.000Z",
+      changedAt: "2026-04-02T00:04:00.000Z",
       changedBy: "operator-1"
     });
-    expect(
-      buildPair({
-        pauseState: {
-          state: "active",
-          changedAt: "2026-04-02T00:02:00.000Z",
-          changedBy: "operator-1"
-        }
-      }).pauseState
-    ).toEqual({
+
+    expect(paused.pauseState).toEqual({
+      state: "paused",
+      changedAt: "2026-04-02T00:03:00.000Z",
+      changedBy: "operator-1",
+      reason: "manual review"
+    });
+    expect(reactivated.pauseState).toEqual({
       state: "active",
-      changedAt: "2026-04-02T00:02:00.000Z",
+      changedAt: "2026-04-02T00:04:00.000Z",
       changedBy: "operator-1"
     });
     expect(() =>
       setPairPauseState(pair, {
         state: "paused",
-        changedAt: "2026-04-02T00:07:00.000Z",
+        changedAt: "2026-04-02T00:03:00.000Z",
+        changedBy: "operator-1",
+        reason: " "
+      })
+    ).toThrow(expect.objectContaining({ code: "INVALID_PAUSE_REASON" }));
+    expect(() =>
+      setPairPauseState(pair, {
+        state: "paused",
+        changedAt: "2026-04-02T00:03:00.000Z",
         changedBy: "operator-1"
       })
-    ).toThrow(
-      expect.objectContaining({
-        code: "INVALID_PAUSE_REASON"
-      })
+    ).toThrow(expect.objectContaining({ code: "INVALID_PAUSE_REASON" }));
+    expect(() => assertPairActive(paused)).toThrow(
+      expect.objectContaining({ code: "PAIR_IS_PAUSED" })
     );
+    expect(() => assertPairActive(reactivated)).not.toThrow();
   });
 
-  it("creates RFQs, quotes, executions, dark orders, matches, and settlement transitions", () => {
-    const atsPair = buildPair({
-      pairId: "pair-ats",
-      mode: "ATSPair",
-      dealers: ["dealer-alpha", "dealer-beta"]
-    });
+  it("opens RFQ sessions only for entitled subscribers", () => {
+    const pair = buildPair();
     const subscriberGrant = buildGrant();
-    const dealerGrant = createAccessGrant({
-      grantId: "grant-dealer",
-      pairId: "pair-ats",
-      subjectId: "dealer-alpha",
-      role: "dealer",
-      grantedAt: createdAt,
-      grantedBy: "operator-1"
-    });
-    const rfq = createRfq({
-      rfqId: "rfq-001",
-      pair: atsPair,
-      accessGrants: [subscriberGrant, dealerGrant],
-      requesterId: "subscriber-1",
-      directedDealerIds: ["dealer-beta", "dealer-alpha"],
-      instrumentId: "CUSIP-1",
-      side: "buy",
-      quantity: 250,
-      createdAt,
-      expiresAt: "2026-04-02T00:15:00.000Z"
-    });
-    const quote = createQuote({
-      quoteId: "quote-001",
-      pair: atsPair,
-      rfq,
-      accessGrants: [subscriberGrant, dealerGrant],
-      dealerId: "dealer-alpha",
-      price: 101.25,
-      quantity: 125,
-      createdAt,
-      expiresAt: "2026-04-02T00:10:00.000Z"
-    });
-    const execution = createExecutionFromQuote({
-      executionId: "execution-001",
-      pair: atsPair,
-      quote,
-      rfq,
-      createdAt
-    });
-    const buyOrder = createDarkOrder({
-      orderId: "order-buy",
-      pair: atsPair,
-      accessGrants: [subscriberGrant],
-      participantId: "subscriber-1",
-      side: "buy",
-      quantity: 100,
-      limitPrice: 102,
-      createdAt
-    });
-    const sellSubscriberGrant = createAccessGrant({
-      grantId: "grant-subscriber-2",
-      pairId: "pair-ats",
-      subjectId: "subscriber-2",
-      role: "subscriber",
-      grantedAt: createdAt,
-      grantedBy: "operator-1"
-    });
-    const sellOrder = createDarkOrder({
-      orderId: "order-sell",
-      pair: atsPair,
-      accessGrants: [sellSubscriberGrant],
-      participantId: "subscriber-2",
-      side: "sell",
-      quantity: 90,
-      limitPrice: 100,
-      createdAt
-    });
-    const match = createMatchProposal({
-      proposalId: "proposal-001",
-      pair: atsPair,
-      buyOrder,
-      sellOrder,
-      proposedPrice: 101,
-      proposedQuantity: 90,
-      referencePrice: 100.5,
-      createdAt
-    });
 
-    expect(rfq.directedDealerIds).toEqual(["dealer-alpha", "dealer-beta"]);
-    expect(quote.status).toBe("active");
-    expect(execution).toEqual({
-      executionId: "execution-001",
-      pairId: "pair-ats",
-      source: "rfq",
-      quoteId: "quote-001",
-      quantity: 125,
-      price: 101.25,
-      buyerId: "subscriber-1",
-      sellerId: "dealer-alpha",
-      createdAt,
-      settlementStatus: "pending"
-    });
     expect(
-      transitionSettlementStatus(transitionSettlementStatus(execution, "affirmed"), "settled")
-        .settlementStatus
-    ).toBe("settled");
-    expect(transitionSettlementStatus(execution, "pending")).toBe(execution);
-    expect(match).toEqual({
-      proposalId: "proposal-001",
-      pairId: "pair-ats",
-      buyOrderId: "order-buy",
-      sellOrderId: "order-sell",
-      proposedPrice: 101,
-      proposedQuantity: 90,
-      referencePrice: 100.5,
-      createdAt,
-      status: "proposed"
-    });
-  });
-
-  it("rejects invalid trading commands", () => {
-    const singleDealerPair = buildPair();
-    const atsPair = buildPair({
-      pairId: "pair-ats",
-      mode: "ATSPair",
-      dealers: ["dealer-alpha", "dealer-beta"]
-    });
-    const subscriberGrant = buildGrant();
-    const dealerGrant = createAccessGrant({
-      grantId: "grant-dealer",
-      pairId: "pair-001",
-      subjectId: "dealer-alpha",
-      role: "dealer",
-      grantedAt: createdAt,
-      grantedBy: "operator-1"
-    });
-    const rfq = createRfq({
+      createRfqSession({
+        rfqId: "rfq-001",
+        pair,
+        accessGrants: [subscriberGrant],
+        subscriberId: "subscriber-1",
+        instrumentId: "CUSIP-1",
+        side: "buy",
+        quantity: 25,
+        createdAt
+      })
+    ).toEqual({
       rfqId: "rfq-001",
-      pair: singleDealerPair,
-      accessGrants: [subscriberGrant, dealerGrant],
-      requesterId: "subscriber-1",
-      directedDealerIds: ["dealer-alpha"],
+      pairId: "pair-001",
+      dealerId: "dealer-alpha",
+      subscriberId: "subscriber-1",
       instrumentId: "CUSIP-1",
-      side: "sell",
-      quantity: 100,
+      side: "buy",
+      quantity: 25,
       createdAt,
-      expiresAt: "2026-04-02T00:10:00.000Z"
+      updatedAt: createdAt,
+      status: "open"
     });
 
     expect(() =>
-      createRfq({
+      createRfqSession({
         rfqId: "rfq-002",
-        pair: singleDealerPair,
+        pair,
         accessGrants: [],
-        requesterId: "subscriber-1",
-        directedDealerIds: ["dealer-beta"],
+        subscriberId: "subscriber-1",
+        instrumentId: "CUSIP-1",
+        side: "sell",
+        quantity: 25,
+        createdAt
+      })
+    ).toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+    expect(() =>
+      createRfqSession({
+        rfqId: "rfq-003",
+        pair: buildPair({
+          pauseState: {
+            state: "paused",
+            changedAt: createdAt,
+            changedBy: "operator-1",
+            reason: "halt"
+          }
+        }),
+        accessGrants: [subscriberGrant],
+        subscriberId: "subscriber-1",
+        instrumentId: "CUSIP-1",
+        side: "buy",
+        quantity: 25,
+        createdAt
+      })
+    ).toThrow(expect.objectContaining({ code: "PAIR_IS_PAUSED" }));
+    expect(() =>
+      createRfqSession({
+        rfqId: "rfq-004",
+        pair,
+        accessGrants: [subscriberGrant],
+        subscriberId: "subscriber-1",
         instrumentId: "CUSIP-1",
         side: "buy",
         quantity: 0,
-        createdAt,
-        expiresAt: "2026-04-02T00:10:00.000Z"
-      })
-    ).toThrow(
-      expect.objectContaining({
-        code: "MISSING_ENTITLEMENT"
-      })
-    );
-    expect(() =>
-      createQuote({
-        quoteId: "quote-002",
-        pair: singleDealerPair,
-        rfq,
-        accessGrants: [subscriberGrant],
-        dealerId: "dealer-beta",
-        price: 0,
-        quantity: 200,
-        createdAt,
-        expiresAt: "2026-04-02T00:10:00.000Z"
-      })
-    ).toThrow(
-      expect.objectContaining({
-        code: "MISSING_ENTITLEMENT"
-      })
-    );
-    expect(() =>
-      createDarkOrder({
-        orderId: "order-001",
-        pair: singleDealerPair,
-        accessGrants: [subscriberGrant],
-        participantId: "subscriber-1",
-        side: "buy",
-        quantity: 10,
-        limitPrice: 99,
         createdAt
       })
-    ).toThrow(
-      expect.objectContaining({
-        code: "DARK_ORDER_REQUIRES_ATS_PAIR"
-      })
-    );
-    const buyOrder = createDarkOrder({
-      orderId: "order-buy",
-      pair: atsPair,
-      accessGrants: [subscriberGrant],
-      participantId: "subscriber-1",
-      side: "buy",
-      quantity: 100,
-      limitPrice: 101,
-      createdAt
+    ).toThrow(expect.objectContaining({ code: "INVALID_RFQ_QUANTITY" }));
+  });
+
+  it("cancels and rejects RFQs idempotently while blocking invalid transitions", () => {
+    const cancelled = cancelRfqSession(buildRfq(), "2026-04-02T00:01:00.000Z", "subscriber-1");
+    const rejected = rejectRfqSession({
+      rfq: buildRfq(),
+      rejectedAt: "2026-04-02T00:01:00.000Z",
+      rejectedBy: "dealer-alpha",
+      reason: " risk "
     });
-    const sellGrant = createAccessGrant({
-      grantId: "grant-subscriber-2",
-      pairId: "pair-ats",
-      subjectId: "subscriber-2",
-      role: "subscriber",
+
+    expect(cancelled).toEqual({
+      ...buildRfq(),
+      status: "cancelled",
+      updatedAt: "2026-04-02T00:01:00.000Z",
+      cancelledAt: "2026-04-02T00:01:00.000Z",
+      cancelledBy: "subscriber-1"
+    });
+    expect(cancelRfqSession(cancelled, "2026-04-02T00:02:00.000Z", "subscriber-1")).toBe(cancelled);
+    expect(rejected).toEqual({
+      ...buildRfq(),
+      status: "rejected",
+      updatedAt: "2026-04-02T00:01:00.000Z",
+      rejectedAt: "2026-04-02T00:01:00.000Z",
+      rejectedBy: "dealer-alpha",
+      rejectionReason: "risk"
+    });
+    expect(
+      rejectRfqSession({
+        rfq: buildRfq({ rfqId: "rfq-002" }),
+        rejectedAt: "2026-04-02T00:01:00.000Z",
+        rejectedBy: "dealer-alpha"
+      })
+    ).toEqual({
+      ...buildRfq({ rfqId: "rfq-002" }),
+      status: "rejected",
+      updatedAt: "2026-04-02T00:01:00.000Z",
+      rejectedAt: "2026-04-02T00:01:00.000Z",
+      rejectedBy: "dealer-alpha"
+    });
+    expect(
+      rejectRfqSession({
+        rfq: rejected,
+        rejectedAt: "2026-04-02T00:02:00.000Z",
+        rejectedBy: "dealer-alpha"
+      })
+    ).toBe(rejected);
+    expect(() =>
+      cancelRfqSession(buildRfq({ status: "accepted" }), "2026-04-02T00:01:00.000Z", "subscriber-1")
+    ).toThrow(expect.objectContaining({ code: "RFQ_NOT_OPEN" }));
+    expect(() =>
+      rejectRfqSession({
+        rfq: buildRfq({ status: "quoted" }),
+        rejectedAt: "2026-04-02T00:01:00.000Z",
+        rejectedBy: "dealer-alpha"
+      })
+    ).toThrow(expect.objectContaining({ code: "RFQ_NOT_OPEN" }));
+    expect(() =>
+      rejectRfqSession({
+        rfq: buildRfq(),
+        rejectedAt: "2026-04-02T00:01:00.000Z",
+        rejectedBy: "dealer-beta"
+      })
+    ).toThrow(expect.objectContaining({ code: "RFQ_DEALER_MISMATCH" }));
+  });
+
+  it("tracks RFQ quoted and quote-expired transitions idempotently", () => {
+    const quoted = markRfqQuoted(buildRfq(), "2026-04-02T00:01:00.000Z");
+    const quoteExpired = markRfqQuoteExpired(quoted, "2026-04-02T00:05:00.000Z");
+
+    expect(quoted).toEqual({
+      ...buildRfq(),
+      status: "quoted",
+      updatedAt: "2026-04-02T00:01:00.000Z"
+    });
+    expect(markRfqQuoted(quoted, "2026-04-02T00:02:00.000Z")).toBe(quoted);
+    expect(quoteExpired).toEqual({
+      ...quoted,
+      status: "quote_expired",
+      updatedAt: "2026-04-02T00:05:00.000Z"
+    });
+    expect(markRfqQuoteExpired(quoteExpired, "2026-04-02T00:06:00.000Z")).toBe(quoteExpired);
+    expect(() =>
+      markRfqQuoted(buildRfq({ status: "cancelled" }), "2026-04-02T00:01:00.000Z")
+    ).toThrow(expect.objectContaining({ code: "RFQ_NOT_OPEN" }));
+    expect(() =>
+      markRfqQuoteExpired(buildRfq({ status: "open" }), "2026-04-02T00:05:00.000Z")
+    ).toThrow(expect.objectContaining({ code: "RFQ_NOT_OPEN" }));
+  });
+
+  it("creates dealer quotes with the single bound dealer and validates quote inputs", () => {
+    const pair = buildPair();
+    const rfq = buildRfq();
+    const dealerGrant = createAccessGrant({
+      grantId: "grant-dealer",
+      pairId: pair.pairId,
+      subjectId: "dealer-alpha",
+      role: "dealer",
       grantedAt: createdAt,
       grantedBy: "operator-1"
     });
-    const badSellOrder = createDarkOrder({
-      orderId: "order-sell",
-      pair: atsPair,
-      accessGrants: [sellGrant],
-      participantId: "subscriber-2",
-      side: "sell",
-      quantity: 100,
-      limitPrice: 102,
-      createdAt
+    const wrongDealerGrant = createAccessGrant({
+      grantId: "grant-dealer-beta",
+      pairId: pair.pairId,
+      subjectId: "dealer-beta",
+      role: "dealer",
+      grantedAt: createdAt,
+      grantedBy: "operator-1"
     });
 
-    expect(() =>
-      createMatchProposal({
-        proposalId: "proposal-002",
-        pair: atsPair,
-        buyOrder: { ...buyOrder, side: "sell" },
-        sellOrder: badSellOrder,
-        proposedPrice: 101.5,
-        proposedQuantity: 100,
-        referencePrice: -1,
-        createdAt
+    expect(
+      createDealerQuote({
+        quoteId: "quote-001",
+        pair,
+        rfq,
+        accessGrants: [dealerGrant],
+        dealerId: "dealer-alpha",
+        price: 101.25,
+        quantity: 25,
+        createdAt,
+        expiresAt: "2026-04-02T00:05:00.000Z"
       })
-    ).toThrow(
-      expect.objectContaining({
-        code: "INVALID_MATCH_SIDES"
-      })
-    );
+    ).toEqual(buildQuote());
+
     expect(() =>
-      transitionSettlementStatus(
-        createExecutionFromQuote({
-          executionId: "execution-002",
-          pair: singleDealerPair,
-          quote: {
-            quoteId: "quote-001",
-            rfqId: rfq.rfqId,
-            pairId: singleDealerPair.pairId,
-            dealerId: "dealer-alpha",
-            price: 100,
-            quantity: 10,
-            createdAt,
-            expiresAt: "2026-04-02T00:10:00.000Z",
-            status: "active"
-          },
-          rfq,
-          createdAt
+      createDealerQuote({
+        quoteId: "quote-002",
+        pair,
+        rfq,
+        accessGrants: [],
+        dealerId: "dealer-alpha",
+        price: 101.25,
+        quantity: 25,
+        createdAt,
+        expiresAt: "2026-04-02T00:05:00.000Z"
+      })
+    ).toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+    expect(() =>
+      createDealerQuote({
+        quoteId: "quote-003",
+        pair,
+        rfq: buildRfq({ status: "quoted" }),
+        accessGrants: [dealerGrant],
+        dealerId: "dealer-alpha",
+        price: 101.25,
+        quantity: 25,
+        createdAt,
+        expiresAt: "2026-04-02T00:05:00.000Z"
+      })
+    ).toThrow(expect.objectContaining({ code: "RFQ_NOT_OPEN" }));
+    expect(() =>
+      createDealerQuote({
+        quoteId: "quote-004",
+        pair,
+        rfq,
+        accessGrants: [wrongDealerGrant],
+        dealerId: "dealer-beta",
+        price: 101.25,
+        quantity: 25,
+        createdAt,
+        expiresAt: "2026-04-02T00:05:00.000Z"
+      })
+    ).toThrow(expect.objectContaining({ code: "RFQ_DEALER_MISMATCH" }));
+    expect(() =>
+      createDealerQuote({
+        quoteId: "quote-005",
+        pair,
+        rfq,
+        accessGrants: [dealerGrant],
+        dealerId: "dealer-alpha",
+        price: 0,
+        quantity: 25,
+        createdAt,
+        expiresAt: "2026-04-02T00:05:00.000Z"
+      })
+    ).toThrow(expect.objectContaining({ code: "INVALID_QUOTE_PRICE" }));
+    expect(() =>
+      createDealerQuote({
+        quoteId: "quote-006",
+        pair,
+        rfq,
+        accessGrants: [dealerGrant],
+        dealerId: "dealer-alpha",
+        price: 101.25,
+        quantity: 30,
+        createdAt,
+        expiresAt: "2026-04-02T00:05:00.000Z"
+      })
+    ).toThrow(expect.objectContaining({ code: "INVALID_QUOTE_QUANTITY" }));
+    expect(() =>
+      createDealerQuote({
+        quoteId: "quote-007",
+        pair: buildPair({
+          pauseState: {
+            state: "paused",
+            changedAt: createdAt,
+            changedBy: "operator-1",
+            reason: "halt"
+          }
         }),
-        "settled"
+        rfq,
+        accessGrants: [dealerGrant],
+        dealerId: "dealer-alpha",
+        price: 101.25,
+        quantity: 25,
+        createdAt,
+        expiresAt: "2026-04-02T00:05:00.000Z"
+      })
+    ).toThrow(expect.objectContaining({ code: "PAIR_IS_PAUSED" }));
+    expect(() =>
+      createDealerQuote({
+        quoteId: "quote-008",
+        pair,
+        rfq,
+        accessGrants: [dealerGrant],
+        dealerId: "dealer-alpha",
+        price: 101.25,
+        quantity: 25,
+        createdAt,
+        expiresAt: "invalid"
+      })
+    ).toThrow(expect.objectContaining({ code: "INVALID_QUOTE_EXPIRY" }));
+    expect(() =>
+      createDealerQuote({
+        quoteId: "quote-009",
+        pair,
+        rfq,
+        accessGrants: [dealerGrant],
+        dealerId: "dealer-alpha",
+        price: 101.25,
+        quantity: 25,
+        createdAt,
+        expiresAt: createdAt
+      })
+    ).toThrow(expect.objectContaining({ code: "INVALID_QUOTE_EXPIRY" }));
+  });
+
+  it("expires quotes deterministically and preserves accepted/expired records", () => {
+    const quote = buildQuote();
+    const expired = expireDealerQuote(quote, "2026-04-02T00:05:00.000Z");
+
+    expect(expireDealerQuote(quote, "2026-04-02T00:04:59.000Z")).toBe(quote);
+    expect(expired).toEqual({
+      ...quote,
+      status: "expired",
+      updatedAt: "2026-04-02T00:05:00.000Z"
+    });
+    expect(expireDealerQuote(expired, "2026-04-02T00:06:00.000Z")).toBe(expired);
+    expect(
+      expireDealerQuote(
+        buildQuote({
+          status: "accepted",
+          acceptedAt: "2026-04-02T00:03:00.000Z",
+          acceptedBy: "subscriber-1"
+        }),
+        "2026-04-02T00:06:00.000Z"
       )
-    ).toThrow(
-      expect.objectContaining({
-        code: "INVALID_SETTLEMENT_TRANSITION"
+    ).toEqual(
+      buildQuote({
+        status: "accepted",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        acceptedBy: "subscriber-1"
       })
     );
   });
-});
 
-describe("configuration compatibility helpers", () => {
-  it("evaluates venue configuration drafts and user-facing labels", () => {
+  it("accepts dealer quotes before expiry exactly once and creates execution artifacts", () => {
+    const pair = buildPair();
+    const subscriberGrant = buildGrant();
+    const rfq = buildRfq({ status: "quoted", updatedAt: "2026-04-02T00:01:00.000Z" });
+    const quote = buildQuote();
+
     expect(
-      evaluateVenueConfiguration({
-        mode: "SingleDealerPair",
-        operatorId: " operator-1 ",
-        dealers: [" dealer-alpha ", "dealer-alpha"],
-        marketingLabel: "Canton Dark Pair"
+      acceptDealerQuote({
+        pair,
+        rfq,
+        quote,
+        accessGrants: [subscriberGrant],
+        acceptedBy: "subscriber-1",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        executionId: "execution-1",
+        instructionId: "instruction-1"
       })
     ).toEqual({
-      isValid: true,
-      normalized: {
-        mode: "SingleDealerPair",
-        operatorId: "operator-1",
-        dealers: ["dealer-alpha"],
-        marketingLabel: "Canton Dark Pair"
+      rfq: {
+        ...rfq,
+        status: "accepted",
+        acceptedQuoteId: "quote-001",
+        updatedAt: "2026-04-02T00:03:00.000Z"
       },
-      violations: []
-    });
-    expect(
-      evaluateVenueConfiguration({
-        mode: "ATSPair",
-        operatorId: " ",
-        dealers: [],
-        marketingLabel: "Operator stock market mirror"
-      }).violations
-    ).toEqual([
-      {
-        code: "OPERATOR_ID_REQUIRED",
-        message: "Each venue configuration must identify the owning operator."
+      quote: {
+        ...quote,
+        status: "accepted",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        acceptedBy: "subscriber-1",
+        updatedAt: "2026-04-02T00:03:00.000Z"
       },
-      {
-        code: "DISALLOWED_USER_FACING_TERM",
-        message: "User-facing labels must avoid the terms 'exchange' and 'stock market'."
+      executionTicket: {
+        executionId: "execution-1",
+        pairId: "pair-001",
+        rfqId: "rfq-001",
+        quoteId: "quote-001",
+        dealerId: "dealer-alpha",
+        subscriberId: "subscriber-1",
+        instrumentId: "CUSIP-1",
+        side: "buy",
+        quantity: 25,
+        price: 101.25,
+        acceptedAt: "2026-04-02T00:03:00.000Z"
       },
-      {
-        code: "ATS_PAIR_REQUIRES_AT_LEAST_ONE_DIRECTED_DEALER",
-        message: "ATSPair venues must configure at least one directed dealer."
+      settlementInstruction: {
+        instructionId: "instruction-1",
+        pairId: "pair-001",
+        executionId: "execution-1",
+        status: "pending",
+        createdAt: "2026-04-02T00:03:00.000Z",
+        updatedAt: "2026-04-02T00:03:00.000Z"
       }
-    ]);
-    expect(
-      evaluateVenueConfiguration({
-        mode: "SingleDealerPair",
-        operatorId: "operator-1",
-        dealers: ["dealer-alpha", "dealer-beta"],
-        marketingLabel: "Canton Dark Pair"
-      }).violations
-    ).toContainEqual({
-      code: "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER",
-      message: "SingleDealerPair venues must configure exactly one dealer."
     });
-    expect(isUserFacingLabelAllowed("Canton Dark Pair")).toBe(true);
-    expect(isUserFacingLabelAllowed("dealer exchange console")).toBe(false);
+
+    expect(() =>
+      acceptDealerQuote({
+        pair,
+        rfq,
+        quote,
+        accessGrants: [],
+        acceptedBy: "subscriber-1",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        executionId: "execution-1",
+        instructionId: "instruction-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+    expect(() =>
+      acceptDealerQuote({
+        pair,
+        rfq,
+        quote,
+        accessGrants: [subscriberGrant],
+        acceptedBy: "subscriber-2",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        executionId: "execution-1",
+        instructionId: "instruction-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+    expect(() =>
+      acceptDealerQuote({
+        pair,
+        rfq,
+        quote: buildQuote({ status: "accepted", acceptedAt: "2026-04-02T00:02:00.000Z" }),
+        accessGrants: [subscriberGrant],
+        acceptedBy: "subscriber-1",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        executionId: "execution-1",
+        instructionId: "instruction-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "QUOTE_ALREADY_ACCEPTED" }));
+    expect(() =>
+      acceptDealerQuote({
+        pair,
+        rfq: buildRfq({
+          status: "accepted",
+          acceptedQuoteId: "quote-001",
+          updatedAt: "2026-04-02T00:02:00.000Z"
+        }),
+        quote,
+        accessGrants: [subscriberGrant],
+        acceptedBy: "subscriber-1",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        executionId: "execution-1",
+        instructionId: "instruction-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "QUOTE_ALREADY_ACCEPTED" }));
+    expect(() =>
+      acceptDealerQuote({
+        pair,
+        rfq,
+        quote: buildQuote({ status: "expired" }),
+        accessGrants: [subscriberGrant],
+        acceptedBy: "subscriber-1",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        executionId: "execution-1",
+        instructionId: "instruction-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "QUOTE_NOT_OPEN" }));
+    expect(() =>
+      acceptDealerQuote({
+        pair,
+        rfq: buildRfq(),
+        quote,
+        accessGrants: [subscriberGrant],
+        acceptedBy: "subscriber-1",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        executionId: "execution-1",
+        instructionId: "instruction-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "RFQ_NOT_OPEN" }));
+    expect(() =>
+      acceptDealerQuote({
+        pair,
+        rfq,
+        quote,
+        accessGrants: [subscriberGrant],
+        acceptedBy: "subscriber-1",
+        acceptedAt: "2026-04-02T00:05:00.000Z",
+        executionId: "execution-1",
+        instructionId: "instruction-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "QUOTE_EXPIRED" }));
+    expect(() =>
+      acceptDealerQuote({
+        pair: buildPair({
+          pauseState: {
+            state: "paused",
+            changedAt: createdAt,
+            changedBy: "operator-1",
+            reason: "halt"
+          }
+        }),
+        rfq,
+        quote,
+        accessGrants: [subscriberGrant],
+        acceptedBy: "subscriber-1",
+        acceptedAt: "2026-04-02T00:03:00.000Z",
+        executionId: "execution-1",
+        instructionId: "instruction-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "PAIR_IS_PAUSED" }));
   });
 
-  it("classifies shared facts on-ledger and local state off-ledger", () => {
-    expect(classifyFactLocation("shared-rfq-state")).toBe("on-ledger");
-    expect(classifyFactLocation("shared-execution-state")).toBe("on-ledger");
-    expect(classifyFactLocation("local-analytics")).toBe("off-ledger");
-    expect(classifyFactLocation("query-cache")).toBe("off-ledger");
-    expect(classifyFactLocation("telemetry-projection")).toBe("off-ledger");
-    expect(classifyFactLocation("ui-state")).toBe("off-ledger");
+  it("progresses settlement instructions through the allowed lifecycle", () => {
+    const instruction: SettlementInstruction = {
+      instructionId: "instruction-1",
+      executionId: "execution-1",
+      pairId: "pair-001",
+      status: "pending",
+      createdAt,
+      updatedAt: createdAt
+    };
+    const affirmed = progressSettlementInstruction(
+      instruction,
+      "affirmed",
+      "2026-04-02T00:10:00.000Z"
+    );
+    const instructed = progressSettlementInstruction(
+      affirmed,
+      "instructed",
+      "2026-04-02T00:20:00.000Z"
+    );
+
+    expect(progressSettlementInstruction(instruction, "pending", "2026-04-02T00:10:00.000Z")).toBe(
+      instruction
+    );
+    expect(affirmed).toEqual({
+      ...instruction,
+      status: "affirmed",
+      updatedAt: "2026-04-02T00:10:00.000Z"
+    });
+    expect(instructed).toEqual({
+      ...affirmed,
+      status: "instructed",
+      updatedAt: "2026-04-02T00:20:00.000Z"
+    });
+    expect(
+      progressSettlementInstruction(instructed, "settled", "2026-04-02T00:30:00.000Z")
+    ).toEqual({
+      ...instructed,
+      status: "settled",
+      updatedAt: "2026-04-02T00:30:00.000Z"
+    });
+    expect(() =>
+      progressSettlementInstruction(instruction, "settled", "2026-04-02T00:10:00.000Z")
+    ).toThrow(expect.objectContaining({ code: "INVALID_SETTLEMENT_TRANSITION" }));
   });
 });

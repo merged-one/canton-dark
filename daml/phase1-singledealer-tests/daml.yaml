@@ -1,0 +1,11 @@
+sdk-version: 2.9.0
+name: canton-dark-phase1-singledealer-tests
+version: 0.0.1
+source: src
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+  - ../core/.daml/dist/canton-dark-daml-core-0.0.1.dar
+  - ../phase1-singledealer/.daml/dist/canton-dark-phase1-singledealer-0.0.1.dar
+init-script: CantonDark.Phase1.SingleDealer.Tests:all

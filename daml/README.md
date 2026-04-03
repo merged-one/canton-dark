@@ -1,8 +1,11 @@
-# Daml Placeholders
+# Daml Phase 1 Packages
 
-The `daml/` tree is intentionally scaffolded but not wired into CI yet because the Daml toolchain is not present in this environment. The placeholders reserve package boundaries for later prompts:
+The Daml tree is split into three packages:
 
-- `daml/core` for shared ledger-facing templates and interfaces
-- `daml/core-tests` for ledger-facing test fixtures and scenario coverage
+- `daml/core` contains shared enums, data records, and rule helpers.
+- `daml/phase1-singledealer` contains the production `SingleDealerPair` templates and choices.
+- `daml/phase1-singledealer-tests` contains script-based happy and negative path coverage.
 
-Before enabling Daml builds, pin a real SDK version and replace the placeholder `sdk-version: 0.0.0`.
+The local environment used for this prompt does not include the Daml SDK, so these packages
+were written and reconciled against the TypeScript model but could not be compiled or executed
+here.

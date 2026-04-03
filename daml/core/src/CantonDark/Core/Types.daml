@@ -1,0 +1,136 @@
+module CantonDark.Core.Types where
+
+import DA.List (elem, nub, sort)
+
+data PairMode = SingleDealerPair
+  deriving (Eq, Ord, Show)
+
+data ParticipantRole
+  = AuditorRole
+  | DealerRole
+  | OperatorRole
+  | SettlementDelegateRole
+  | SubscriberRole
+  deriving (Eq, Ord, Show)
+
+data Entitlement
+  = AcceptQuote
+  | ApprovePair
+  | ManageAccess
+  | PausePair
+  | ProgressSettlement
+  | RespondQuote
+  | SubmitRfq
+  | ViewAudit
+  | ViewPair
+  deriving (Eq, Ord, Show)
+
+data RFQSide = Buy | Sell
+  deriving (Eq, Ord, Show)
+
+data ApprovalStatus = ApprovalApproved | ApprovalRejected
+  deriving (Eq, Ord, Show)
+
+data AttestationStatus = AttestationAttested | AttestationExpired
+  deriving (Eq, Ord, Show)
+
+data PauseStatus = PairActive | PairPaused
+  deriving (Eq, Ord, Show)
+
+data RFQStatus
+  = RfqAccepted
+  | RfqCancelled
+  | RfqOpen
+  | RfqQuoteExpired
+  | RfqQuoted
+  | RfqRejected
+  deriving (Eq, Ord, Show)
+
+data QuoteStatus = QuoteAccepted | QuoteExpired | QuoteOpen
+  deriving (Eq, Ord, Show)
+
+data SettlementStatus
+  = SettlementAffirmed
+  | SettlementFailed
+  | SettlementInstructed
+  | SettlementPending
+  | SettlementSettled
+  deriving (Eq, Ord, Show)
+
+data OperatorApprovalData = OperatorApprovalData with
+  approvedAt : Time
+  approvedBy : Party
+  note : Optional Text
+  status : ApprovalStatus
+  deriving (Eq, Show)
+
+data RegulatoryAttestationData = RegulatoryAttestationData with
+  attestedAt : Time
+  attestedBy : Party
+  jurisdiction : Text
+  status : AttestationStatus
+  deriving (Eq, Show)
+
+data RulebookReleaseData = RulebookReleaseData with
+  effectiveAt : Time
+  publishedBy : Party
+  releaseId : Text
+  summary : Text
+  version : Text
+  deriving (Eq, Show)
+
+data PauseStateData = PauseStateData with
+  changedAt : Time
+  changedBy : Party
+  reason : Optional Text
+  state : PauseStatus
+  deriving (Eq, Show)
+
+uniqueSorted : Ord a => [a] -> [a]
+uniqueSorted values = nub (sort values)
+
+defaultEntitlements : ParticipantRole -> [Entitlement]
+defaultEntitlements role =
+  case role of
+    OperatorRole -> [ApprovePair, ManageAccess, PausePair, ProgressSettlement, ViewAudit, ViewPair]
+    DealerRole -> [RespondQuote, ViewPair]
+    SubscriberRole -> [AcceptQuote, SubmitRfq, ViewPair]
+    SettlementDelegateRole -> [ProgressSettlement, ViewPair]
+    AuditorRole -> [ViewAudit, ViewPair]
+
+normalizeEntitlements : ParticipantRole -> [Entitlement] -> [Entitlement]
+normalizeEntitlements role extraEntitlements = uniqueSorted (defaultEntitlements role ++ extraEntitlements)
+
+hasGrantEntitlement : [Entitlement] -> Optional Time -> Entitlement -> Bool
+hasGrantEntitlement entitlements revokedAt entitlement =
+  case revokedAt of
+    None -> elem entitlement entitlements
+    Some _ -> False
+
+isActivePauseState : PauseStateData -> Bool
+isActivePauseState pauseState = pauseState.state == PairActive
+
+canProgressSettlement : SettlementStatus -> SettlementStatus -> Bool
+canProgressSettlement fromStatus toStatus =
+  case fromStatus of
+    SettlementPending -> elem toStatus [SettlementAffirmed, SettlementFailed]
+    SettlementAffirmed -> elem toStatus [SettlementInstructed, SettlementFailed]
+    SettlementInstructed -> elem toStatus [SettlementSettled, SettlementFailed]
+    SettlementSettled -> False
+    SettlementFailed -> False
+
+mkActivePauseState : Time -> Party -> PauseStateData
+mkActivePauseState changedAt changedBy =
+  PauseStateData with
+    changedAt
+    changedBy
+    reason = None
+    state = PairActive
+
+mkPausedPauseState : Time -> Party -> Text -> PauseStateData
+mkPausedPauseState changedAt changedBy reason =
+  PauseStateData with
+    changedAt
+    changedBy
+    reason = Some reason
+    state = PairPaused
