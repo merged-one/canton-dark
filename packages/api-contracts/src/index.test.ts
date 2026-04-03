@@ -7,8 +7,15 @@ import {
   grantAccessRequestSchema,
   markSettlementProgressionRequestSchema,
   openRfqRequestSchema,
+  parseAuditTrailView,
   parseCreatePairRequest,
+  parseDealerWorkbenchView,
+  parseDemoClockAdvanceRequest,
+  parseDemoResetRequest,
+  parseDemoStatusResponse,
   parseHealthResponse,
+  parseOperatorView,
+  parseSubscriberView,
   pausePairRequestSchema,
   rejectRfqRequestSchema,
   submitQuoteRequestSchema
@@ -75,6 +82,136 @@ describe("api-contract runtime schemas", () => {
         },
         violations: []
       }
+    });
+    expect(
+      parseOperatorView({
+        pair: {
+          pairId: "pair-1",
+          mode: "SingleDealerPair",
+          operatorId: "operator-1",
+          dealerId: "dealer-alpha",
+          paused: false,
+          rulebookVersion: "v1",
+          approvalStatus: "approved",
+          attestationStatus: "attested"
+        },
+        access: {
+          pairId: "pair-1",
+          participants: []
+        },
+        rfqs: [],
+        quotes: [],
+        executions: [],
+        settlements: [],
+        health: {
+          title: "SingleDealerPair health",
+          status: "healthy",
+          detail: "healthy",
+          summary: {
+            pairId: "pair-1",
+            mode: "SingleDealerPair",
+            operatorId: "operator-1",
+            dealers: ["dealer-alpha"],
+            paused: false,
+            rulebookVersion: "v1",
+            activeParticipantCount: 3,
+            ledgerFacts: ["RFQ sessions"],
+            offLedgerFacts: ["Operator analytics"]
+          },
+          violations: []
+        }
+      })
+    ).toMatchObject({
+      pair: {
+        pairId: "pair-1"
+      }
+    });
+    expect(
+      parseSubscriberView({
+        pair: {
+          pairId: "pair-1",
+          mode: "SingleDealerPair",
+          operatorId: "operator-1",
+          dealerId: "dealer-alpha",
+          paused: false,
+          rulebookVersion: "v1",
+          approvalStatus: "approved",
+          attestationStatus: "attested"
+        },
+        subscriberId: "subscriber-1",
+        entitlements: ["submit_rfq"],
+        canOpenRfq: true,
+        rfqs: [],
+        quotes: [],
+        executions: [],
+        settlements: []
+      })
+    ).toMatchObject({
+      subscriberId: "subscriber-1"
+    });
+    expect(
+      parseDealerWorkbenchView({
+        pair: {
+          pairId: "pair-1",
+          mode: "SingleDealerPair",
+          operatorId: "operator-1",
+          dealerId: "dealer-alpha",
+          paused: false,
+          rulebookVersion: "v1",
+          approvalStatus: "approved",
+          attestationStatus: "attested"
+        },
+        dealerId: "dealer-alpha",
+        rfqs: [],
+        quotes: [],
+        executions: []
+      })
+    ).toMatchObject({
+      dealerId: "dealer-alpha"
+    });
+    expect(
+      parseAuditTrailView({
+        pairId: "pair-1",
+        entries: []
+      })
+    ).toEqual({
+      pairId: "pair-1",
+      entries: []
+    });
+    expect(
+      parseDemoResetRequest({
+        mode: "phase1-ready",
+        seed: 424242
+      })
+    ).toEqual({
+      mode: "phase1-ready",
+      seed: 424242
+    });
+    expect(
+      parseDemoClockAdvanceRequest({
+        milliseconds: 5_000
+      })
+    ).toEqual({
+      milliseconds: 5_000
+    });
+    expect(
+      parseDemoStatusResponse({
+        currentTime: "2026-04-02T00:00:00.000Z",
+        dealerId: "dealer-alpha",
+        mode: "phase1-ready",
+        operatorId: "operator-demo",
+        pairId: "pair-phase1-demo",
+        seed: 424242,
+        subscriberId: "subscriber-1"
+      })
+    ).toEqual({
+      currentTime: "2026-04-02T00:00:00.000Z",
+      dealerId: "dealer-alpha",
+      mode: "phase1-ready",
+      operatorId: "operator-demo",
+      pairId: "pair-phase1-demo",
+      seed: 424242,
+      subscriberId: "subscriber-1"
     });
   });
 
@@ -244,7 +381,10 @@ describe("api-contract runtime schemas", () => {
       "DealerWorkbenchView",
       "AuditTrailView",
       "VenueHealthReadModel",
-      "HealthResponse"
+      "HealthResponse",
+      "DemoResetRequest",
+      "DemoClockAdvanceRequest",
+      "DemoStatusResponse"
     ]);
   });
 });

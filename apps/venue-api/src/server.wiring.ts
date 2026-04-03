@@ -4,7 +4,23 @@ import { createVenueApiApp } from "./app";
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? 4301);
-const api = await createVenueApiApp();
+const api = await createVenueApiApp({
+  ...((process.env.VENUE_API_BOOTSTRAP_MODE === "empty" ||
+    process.env.VENUE_API_BOOTSTRAP_MODE === "phase1-complete" ||
+    process.env.VENUE_API_BOOTSTRAP_MODE === "phase1-ready") && {
+    bootstrapMode: process.env.VENUE_API_BOOTSTRAP_MODE
+  }),
+  ...(process.env.VENUE_API_SEED === undefined
+    ? {}
+    : {
+        seed: Number(process.env.VENUE_API_SEED)
+      }),
+  ...(process.env.VENUE_API_START_AT === undefined
+    ? {}
+    : {
+        startAt: process.env.VENUE_API_START_AT
+      })
+});
 
 createServer((request, response) => {
   response.setHeader("access-control-allow-origin", "*");

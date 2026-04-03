@@ -54,9 +54,17 @@ importers:
         specifier: 4.1.2
         version: 4.1.2(@types/node@25.5.0)(jsdom@29.0.1)(vite@8.0.3(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@25.5.0)(esbuild@0.27.7)(tsx@4.21.0))
 
-  apps/dealer-workbench: {}
+  apps/dealer-workbench:
+    dependencies:
+      '@canton-dark/ui-sdk':
+        specifier: workspace:*
+        version: link:../../packages/ui-sdk
 
-  apps/demo-orchestrator: {}
+  apps/demo-orchestrator:
+    dependencies:
+      '@canton-dark/ui-sdk':
+        specifier: workspace:*
+        version: link:../../packages/ui-sdk
 
   apps/operator-console:
     dependencies:
@@ -67,7 +75,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui-sdk
 
-  apps/subscriber-terminal: {}
+  apps/subscriber-terminal:
+    dependencies:
+      '@canton-dark/ui-sdk':
+        specifier: workspace:*
+        version: link:../../packages/ui-sdk
 
   apps/venue-api:
     dependencies:
@@ -83,6 +95,9 @@ importers:
       '@canton-dark/domain-core':
         specifier: workspace:*
         version: link:../../packages/domain-core
+      '@canton-dark/sim-harness':
+        specifier: workspace:*
+        version: link:../../packages/sim-harness
 
   packages/adapters-canton:
     dependencies:
@@ -104,6 +119,9 @@ importers:
 
   packages/api-contracts:
     dependencies:
+      '@canton-dark/domain-core':
+        specifier: workspace:*
+        version: link:../domain-core
       '@canton-dark/query-models':
         specifier: workspace:*
         version: link:../query-models
@@ -165,6 +183,9 @@ importers:
       '@canton-dark/api-contracts':
         specifier: workspace:*
         version: link:../api-contracts
+      '@canton-dark/query-models':
+        specifier: workspace:*
+        version: link:../query-models
       '@canton-dark/ui-kit':
         specifier: workspace:*
         version: link:../ui-kit

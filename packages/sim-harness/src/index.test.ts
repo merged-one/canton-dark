@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { createMemoryVenueEnvironment } from "@canton-dark/adapters-memory";
 
 import {
+  createPhase1DemoSteps,
   createDeterministicScheduler,
   createScenarioRecorder,
   createSeededRandom,
   parseReplayFile,
   persona,
+  phase1DemoDefaults,
   replayScenario,
   runPhase1DemoScenario,
   runScenario,
+  seedPhase1DemoEnvironment,
   serializeReplayFile
 } from "./index";
 
@@ -127,6 +131,7 @@ describe("sim-harness", () => {
             operatorId: "operator-demo",
             dealerId: "dealer-alpha",
             jurisdiction: "US",
+            pairId: "pair-phase1-demo",
             rulebookVersion: "v1",
             rulebookSummary: "initial"
           }
@@ -193,13 +198,27 @@ describe("sim-harness", () => {
             executionAlias: "execution",
             settlementAlias: "settlement"
           }
+        },
+        {
+          atMs: 5000,
+          actor: {
+            role: "operator",
+            participantId: "operator-demo",
+            displayName: "operator-demo"
+          },
+          command: {
+            kind: "mark_settlement_progression",
+            pairAlias: "pair",
+            settlementAlias: "settlement",
+            status: "affirmed"
+          }
         }
       ],
       outputs: [
         {
           alias: "pair",
           type: "pair",
-          id: "pair-0093ci-000001"
+          id: "pair-phase1-demo"
         },
         {
           alias: "rfq",
@@ -310,5 +329,27 @@ describe("sim-harness", () => {
       "execution",
       "settlement"
     ]);
+  });
+
+  it("builds deterministic phase 1 demo steps and seed metadata", async () => {
+    const environment = createMemoryVenueEnvironment();
+
+    expect(createPhase1DemoSteps("empty")).toEqual([]);
+
+    const seeded = await seedPhase1DemoEnvironment(environment, {
+      mode: "phase1-ready",
+      seed: 12
+    });
+
+    expect(seeded.mode).toBe("phase1-ready");
+    expect(seeded.pairId).toBe(phase1DemoDefaults.pairId);
+    expect(seeded.operatorId).toBe(phase1DemoDefaults.operatorId);
+    expect(seeded.dealerId).toBe(phase1DemoDefaults.dealerId);
+    expect(seeded.subscriberId).toBe(phase1DemoDefaults.subscriberId);
+    expect(seeded.replay.outputs).toContainEqual({
+      alias: "pair",
+      id: phase1DemoDefaults.pairId,
+      type: "pair"
+    });
   });
 });

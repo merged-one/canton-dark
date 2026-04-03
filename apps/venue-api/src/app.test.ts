@@ -15,14 +15,14 @@ describe("venue-api", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       service: "venue-api",
-      generatedAt: "2026-04-02T00:00:00.000Z",
+      generatedAt: "2026-04-02T00:00:01.000Z",
       venue: {
         title: "SingleDealerPair health",
         status: "healthy",
         detail:
           "Operator operator-demo oversees dealer dealer-alpha with 3 active participant grant(s).",
         summary: {
-          pairId: "pair-demo",
+          pairId: "pair-phase1-demo",
           mode: "SingleDealerPair",
           operatorId: "operator-demo",
           dealers: ["dealer-alpha"],
@@ -161,19 +161,31 @@ describe("venue-api", () => {
 
     const operatorView = await api.handleRequest({
       method: "GET",
-      url: `/pairs/${pair.pairId}/views/operator`
+      url: `/pairs/${pair.pairId}/views/operator`,
+      headers: {
+        "x-actor-id": "operator-2"
+      }
     });
     const subscriberView = await api.handleRequest({
       method: "GET",
-      url: `/pairs/${pair.pairId}/views/subscriber?subscriberId=subscriber-2`
+      url: `/pairs/${pair.pairId}/views/subscriber?subscriberId=subscriber-2`,
+      headers: {
+        "x-actor-id": "subscriber-2"
+      }
     });
     const dealerView = await api.handleRequest({
       method: "GET",
-      url: `/pairs/${pair.pairId}/views/dealer-workbench?dealerId=dealer-beta`
+      url: `/pairs/${pair.pairId}/views/dealer-workbench?dealerId=dealer-beta`,
+      headers: {
+        "x-actor-id": "dealer-beta"
+      }
     });
     const auditTrail = await api.handleRequest({
       method: "GET",
-      url: `/pairs/${pair.pairId}/audit-trail`
+      url: `/pairs/${pair.pairId}/audit-trail`,
+      headers: {
+        "x-actor-id": "operator-2"
+      }
     });
 
     expect(operatorView.status).toBe(200);
@@ -189,6 +201,76 @@ describe("venue-api", () => {
     expect((dealerView.body as { quotes: unknown[] }).quotes).toHaveLength(1);
     expect(auditTrail.status).toBe(200);
     expect((auditTrail.body as { entries: unknown[] }).entries.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("serves demo status, reset, and clock controls through typed routes", async () => {
+    const api = await createVenueApiApp({
+      bootstrapMode: "empty",
+      seed: 99,
+      startAt: "2026-04-02T00:00:00.000Z"
+    });
+
+    expect(api.environment).toBeDefined();
+
+    expect(
+      await api.handleRequest({
+        method: "GET",
+        url: "/demo/status"
+      })
+    ).toEqual({
+      status: 200,
+      body: {
+        currentTime: "2026-04-02T00:00:00.000Z",
+        dealerId: "dealer-alpha",
+        mode: "empty",
+        operatorId: "operator-demo",
+        pairId: "pair-phase1-demo",
+        seed: 99,
+        subscriberId: "subscriber-1"
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: "/demo/reset",
+        body: {
+          mode: "phase1-complete"
+        }
+      })
+    ).toEqual({
+      status: 200,
+      body: {
+        currentTime: "2026-04-02T00:00:05.000Z",
+        dealerId: "dealer-alpha",
+        mode: "phase1-complete",
+        operatorId: "operator-demo",
+        pairId: "pair-phase1-demo",
+        seed: 99,
+        subscriberId: "subscriber-1"
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: "/demo/clock/advance",
+        body: {
+          milliseconds: 300000
+        }
+      })
+    ).toEqual({
+      status: 200,
+      body: {
+        currentTime: "2026-04-02T00:05:05.000Z",
+        dealerId: "dealer-alpha",
+        mode: "phase1-complete",
+        operatorId: "operator-demo",
+        pairId: "pair-phase1-demo",
+        seed: 99,
+        subscriberId: "subscriber-1"
+      }
+    });
   });
 
   it("returns typed errors for invalid and unhappy paths", async () => {
@@ -241,7 +323,7 @@ describe("venue-api", () => {
         }
       })
     ).toEqual({
-      status: 409,
+      status: 403,
       body: {
         code: "MISSING_ENTITLEMENT",
         message: "The subscriber does not hold submit_rfq permission for this pair."
@@ -300,7 +382,10 @@ describe("venue-api", () => {
     expect(
       await api.handleRequest({
         method: "GET",
-        url: "/pairs/missing/views/operator"
+        url: "/pairs/missing/views/operator",
+        headers: {
+          "x-actor-id": "operator-3"
+        }
       })
     ).toEqual({
       status: 404,
@@ -325,7 +410,10 @@ describe("venue-api", () => {
     expect(
       await api.handleRequest({
         method: "GET",
-        url: "/pairs/missing/views/subscriber?subscriberId=subscriber-missing"
+        url: "/pairs/missing/views/subscriber?subscriberId=subscriber-missing",
+        headers: {
+          "x-actor-id": "subscriber-missing"
+        }
       })
     ).toEqual({
       status: 404,
@@ -337,7 +425,10 @@ describe("venue-api", () => {
     expect(
       await api.handleRequest({
         method: "GET",
-        url: "/pairs/missing/views/dealer-workbench?dealerId=dealer-missing"
+        url: "/pairs/missing/views/dealer-workbench?dealerId=dealer-missing",
+        headers: {
+          "x-actor-id": "dealer-missing"
+        }
       })
     ).toEqual({
       status: 404,
@@ -349,7 +440,10 @@ describe("venue-api", () => {
     expect(
       await api.handleRequest({
         method: "GET",
-        url: "/pairs/missing/audit-trail"
+        url: "/pairs/missing/audit-trail",
+        headers: {
+          "x-actor-id": "operator-3"
+        }
       })
     ).toEqual({
       status: 404,
@@ -379,7 +473,7 @@ describe("venue-api", () => {
     });
     const api = await createVenueApiApp(environment);
 
-    expect(api.demoPairId).toBe("pair-preseeded");
+    expect(api.demoPairId).toBe("pair-phase1-demo");
 
     const rfqReply = await api.handleRequest({
       method: "POST",

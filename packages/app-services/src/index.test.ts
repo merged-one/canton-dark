@@ -295,7 +295,7 @@ describe("createVenueApplication", () => {
       throw new Error("Expected health view for existing pair.");
     }
 
-    expect(await app.getOperatorView(pair.pairId)).toEqual({
+    expect(await app.getOperatorView(pair.pairId, "operator-1")).toEqual({
       pair: {
         pairId: "pair-demo",
         mode: "SingleDealerPair",
@@ -384,7 +384,7 @@ describe("createVenueApplication", () => {
       ],
       health
     });
-    expect(await app.getSubscriberView(pair.pairId, "subscriber-1")).toEqual({
+    expect(await app.getSubscriberView(pair.pairId, "subscriber-1", "subscriber-1")).toEqual({
       pair: {
         pairId: "pair-demo",
         mode: "SingleDealerPair",
@@ -434,7 +434,7 @@ describe("createVenueApplication", () => {
         }
       ]
     });
-    expect(await app.getDealerWorkbenchView(pair.pairId, "dealer-alpha")).toEqual({
+    expect(await app.getDealerWorkbenchView(pair.pairId, "dealer-alpha", "dealer-alpha")).toEqual({
       pair: {
         pairId: "pair-demo",
         mode: "SingleDealerPair",
@@ -473,7 +473,7 @@ describe("createVenueApplication", () => {
       ],
       executions: [accepted.executionTicket]
     });
-    const auditTrail = await app.getAuditTrail(pair.pairId);
+    const auditTrail = await app.getAuditTrail(pair.pairId, "operator-1");
 
     expect(auditTrail?.pairId).toBe("pair-demo");
     expect(auditTrail?.entries.map((entry) => entry.action)).toEqual([
@@ -620,10 +620,23 @@ describe("createVenueApplication", () => {
         status: "affirmed"
       })
     ).rejects.toThrow("Settlement instruction missing was not found.");
-    expect(await app.getOperatorView("missing")).toBeNull();
-    expect(await app.getSubscriberView("missing", "subscriber-1")).toBeNull();
-    expect(await app.getDealerWorkbenchView("missing", "dealer-alpha")).toBeNull();
-    expect(await app.getAuditTrail("missing")).toBeNull();
+    await expect(app.getOperatorView(pair.pairId, "subscriber-1")).rejects.toThrow(
+      expect.objectContaining({ code: "MISSING_ENTITLEMENT" })
+    );
+    await expect(
+      app.getSubscriberView(pair.pairId, "subscriber-1", "subscriber-2")
+    ).rejects.toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+    await expect(
+      app.getDealerWorkbenchView(pair.pairId, "dealer-alpha", "subscriber-1")
+    ).rejects.toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+    await expect(app.getAuditTrail(pair.pairId, "subscriber-1")).rejects.toThrow(
+      expect.objectContaining({ code: "MISSING_ENTITLEMENT" })
+    );
+    expect(await app.getAuditTrail(pair.pairId, "subscriber-2")).not.toBeNull();
+    expect(await app.getOperatorView("missing", "operator-1")).toBeNull();
+    expect(await app.getSubscriberView("missing", "subscriber-1", "subscriber-1")).toBeNull();
+    expect(await app.getDealerWorkbenchView("missing", "dealer-alpha", "dealer-alpha")).toBeNull();
+    expect(await app.getAuditTrail("missing", "operator-1")).toBeNull();
     expect(await app.getVenueHealth("missing")).toBeNull();
     expect(quote.quote.status).toBe("open");
   });

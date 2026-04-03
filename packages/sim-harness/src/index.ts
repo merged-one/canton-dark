@@ -1,6 +1,7 @@
 import {
   createMemoryVenueEnvironment,
-  type DeterministicClock
+  type DeterministicClock,
+  type MemoryVenueEnvironment
 } from "@canton-dark/adapters-memory";
 import type { ParticipantRole, RFQSide, SettlementStatus } from "@canton-dark/domain-core";
 import { createReplayMetadata } from "@canton-dark/testkit";
@@ -23,6 +24,7 @@ export type CreatePairScenarioCommand = {
   jurisdiction: string;
   kind: "create_pair";
   operatorId: string;
+  pairId?: string;
   rulebookSummary: string;
   rulebookVersion: string;
 };
@@ -101,6 +103,23 @@ export type ScenarioResult = {
   replay: ScenarioReplayFile;
   replayCommand: string;
 };
+
+export type Phase1DemoMode = "empty" | "phase1-complete" | "phase1-ready";
+
+export type Phase1DemoSeedResult = ScenarioResult & {
+  dealerId: string;
+  mode: Phase1DemoMode;
+  operatorId: string;
+  pairId: string;
+  subscriberId: string;
+};
+
+export const phase1DemoDefaults = {
+  dealerId: "dealer-alpha",
+  operatorId: "operator-demo",
+  pairId: "pair-phase1-demo",
+  subscriberId: "subscriber-1"
+} as const;
 
 export type DeterministicScheduler = {
   runAll: () => Promise<readonly string[]>;
@@ -218,15 +237,13 @@ export const serializeReplayFile = (replay: ScenarioReplayFile): string =>
 export const parseReplayFile = (value: string): ScenarioReplayFile =>
   JSON.parse(value) as ScenarioReplayFile;
 
-export const runScenario = async (input: {
-  seed: number;
-  startAt?: Date | string;
-  steps: readonly ScenarioStep[];
-}): Promise<ScenarioResult> => {
-  const environment = createMemoryVenueEnvironment({
-    seed: input.seed,
-    ...(input.startAt !== undefined ? { startAt: input.startAt } : {})
-  });
+const executeScenario = async (
+  environment: MemoryVenueEnvironment,
+  input: {
+    seed: number;
+    steps: readonly ScenarioStep[];
+  }
+): Promise<ScenarioResult> => {
   const scheduler = createDeterministicScheduler(environment.clock);
   const recorder = createScenarioRecorder(input.seed, environment.clock.now().toISOString());
   const aliases = new Map<string, string>();
@@ -242,6 +259,7 @@ export const runScenario = async (input: {
             operatorId: step.command.operatorId,
             dealerId: step.command.dealerId,
             jurisdiction: step.command.jurisdiction,
+            ...(step.command.pairId !== undefined ? { pairId: step.command.pairId } : {}),
             rulebookVersion: step.command.rulebookVersion,
             rulebookSummary: step.command.rulebookSummary
           });
@@ -337,43 +355,43 @@ export const runScenario = async (input: {
   };
 };
 
-export const replayScenario = async (replay: ScenarioReplayFile): Promise<ScenarioResult> =>
-  runScenario({
-    seed: replay.seed,
-    startAt: replay.startedAt,
-    steps: replay.steps
-  });
+export const createPhase1DemoSteps = (mode: Phase1DemoMode): readonly ScenarioStep[] => {
+  if (mode === "empty") {
+    return [];
+  }
 
-export const runPhase1DemoScenario = async (seed: number): Promise<ScenarioResult> =>
-  runScenario({
-    seed,
-    steps: [
-      {
-        atMs: 0,
-        actor: persona.operator("operator-demo", "Operator"),
-        command: {
-          kind: "create_pair",
-          alias: "pair",
-          operatorId: "operator-demo",
-          dealerId: "dealer-alpha",
-          jurisdiction: "US",
-          rulebookVersion: "v1",
-          rulebookSummary: "initial"
-        }
-      },
-      {
-        atMs: 1_000,
-        actor: persona.operator("operator-demo"),
-        command: {
-          kind: "grant_access",
-          pairAlias: "pair",
-          role: "subscriber",
-          subjectId: "subscriber-1"
-        }
-      },
+  const steps: ScenarioStep[] = [
+    {
+      atMs: 0,
+      actor: persona.operator(phase1DemoDefaults.operatorId, "Operator"),
+      command: {
+        kind: "create_pair",
+        alias: "pair",
+        pairId: phase1DemoDefaults.pairId,
+        operatorId: phase1DemoDefaults.operatorId,
+        dealerId: phase1DemoDefaults.dealerId,
+        jurisdiction: "US",
+        rulebookVersion: "v1",
+        rulebookSummary: "initial"
+      }
+    },
+    {
+      atMs: 1_000,
+      actor: persona.operator(phase1DemoDefaults.operatorId),
+      command: {
+        kind: "grant_access",
+        pairAlias: "pair",
+        role: "subscriber",
+        subjectId: phase1DemoDefaults.subscriberId
+      }
+    }
+  ];
+
+  if (mode === "phase1-complete") {
+    steps.push(
       {
         atMs: 2_000,
-        actor: persona.subscriber("subscriber-1"),
+        actor: persona.subscriber(phase1DemoDefaults.subscriberId),
         command: {
           kind: "open_rfq",
           alias: "rfq",
@@ -385,7 +403,7 @@ export const runPhase1DemoScenario = async (seed: number): Promise<ScenarioResul
       },
       {
         atMs: 3_000,
-        actor: persona.dealer("dealer-alpha"),
+        actor: persona.dealer(phase1DemoDefaults.dealerId),
         command: {
           kind: "submit_quote",
           alias: "quote",
@@ -398,7 +416,7 @@ export const runPhase1DemoScenario = async (seed: number): Promise<ScenarioResul
       },
       {
         atMs: 4_000,
-        actor: persona.subscriber("subscriber-1"),
+        actor: persona.subscriber(phase1DemoDefaults.subscriberId),
         command: {
           kind: "accept_quote",
           pairAlias: "pair",
@@ -407,6 +425,69 @@ export const runPhase1DemoScenario = async (seed: number): Promise<ScenarioResul
           executionAlias: "execution",
           settlementAlias: "settlement"
         }
+      },
+      {
+        atMs: 5_000,
+        actor: persona.operator(phase1DemoDefaults.operatorId),
+        command: {
+          kind: "mark_settlement_progression",
+          pairAlias: "pair",
+          settlementAlias: "settlement",
+          status: "affirmed"
+        }
       }
-    ]
+    );
+  }
+
+  return steps;
+};
+
+export const seedPhase1DemoEnvironment = async (
+  environment: MemoryVenueEnvironment,
+  input: {
+    mode: Phase1DemoMode;
+    seed: number;
+  }
+): Promise<Phase1DemoSeedResult> => {
+  const result = await executeScenario(environment, {
+    seed: input.seed,
+    steps: createPhase1DemoSteps(input.mode)
+  });
+
+  return {
+    ...result,
+    mode: input.mode,
+    pairId: phase1DemoDefaults.pairId,
+    operatorId: phase1DemoDefaults.operatorId,
+    dealerId: phase1DemoDefaults.dealerId,
+    subscriberId: phase1DemoDefaults.subscriberId
+  };
+};
+
+export const runScenario = async (input: {
+  seed: number;
+  startAt?: Date | string;
+  steps: readonly ScenarioStep[];
+}): Promise<ScenarioResult> => {
+  const environment = createMemoryVenueEnvironment({
+    seed: input.seed,
+    ...(input.startAt !== undefined ? { startAt: input.startAt } : {})
+  });
+  return executeScenario(environment, {
+    seed: input.seed,
+    steps: input.steps
+  });
+};
+
+export const replayScenario = async (replay: ScenarioReplayFile): Promise<ScenarioResult> =>
+  runScenario({
+    seed: replay.seed,
+    startAt: replay.startedAt,
+    steps: replay.steps
+  });
+
+export const runPhase1DemoScenario = async (seed: number): Promise<ScenarioResult> =>
+  runScenario({
+    seed,
+    steps: createPhase1DemoSteps("phase1-complete")
   });

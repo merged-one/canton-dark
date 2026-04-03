@@ -7,6 +7,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "demo:phase1": "node scripts/demo-phase1.mjs",
+    "demo:phase1:seed": "node scripts/demo-phase1-seed.mjs",
     "lint": "turbo run lint && eslint tests playwright.config.ts vitest.shared.ts && prettier --check .",
     "format": "prettier --write .",
     "typecheck": "turbo run typecheck",
@@ -16,6 +18,7 @@
     "test:property:replay": "node scripts/replay-property.mjs",
     "test:contract": "turbo run test:contract --concurrency=1",
     "test:e2e": "playwright test",
+    "test:e2e:phase1": "playwright test --grep @phase1",
     "coverage:aggregate": "node scripts/verify-coverage.mjs",
     "ci:verify": "pnpm lint && pnpm typecheck && pnpm test"
   },

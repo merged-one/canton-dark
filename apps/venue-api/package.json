@@ -13,6 +13,7 @@
     "@canton-dark/adapters-memory": "workspace:*",
     "@canton-dark/api-contracts": "workspace:*",
     "@canton-dark/app-services": "workspace:*",
-    "@canton-dark/domain-core": "workspace:*"
+    "@canton-dark/domain-core": "workspace:*",
+    "@canton-dark/sim-harness": "workspace:*"
   }
 }

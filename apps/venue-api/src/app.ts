@@ -4,18 +4,25 @@ import {
 } from "@canton-dark/adapters-memory";
 import {
   ContractValidationError,
-  parseCreatePairRequest,
-  type HealthResponse
-} from "@canton-dark/api-contracts";
-import {
+  demoClockAdvanceRequestSchema,
   grantAccessRequestSchema,
   markSettlementProgressionRequestSchema,
   openRfqRequestSchema,
+  parseCreatePairRequest,
+  parseDemoResetRequest,
   pausePairRequestSchema,
   rejectRfqRequestSchema,
-  submitQuoteRequestSchema
+  submitQuoteRequestSchema,
+  type DemoMode,
+  type DemoStatusResponse,
+  type HealthResponse
 } from "@canton-dark/api-contracts";
 import { DomainError } from "@canton-dark/domain-core";
+import {
+  phase1DemoDefaults,
+  seedPhase1DemoEnvironment,
+  type Phase1DemoMode
+} from "@canton-dark/sim-harness";
 
 type ApiRequest = {
   body?: unknown;
@@ -29,10 +36,18 @@ type ApiReply = {
   status: number;
 };
 
+type VenueApiAppOptions = {
+  bootstrapMode?: DemoMode;
+  environment?: MemoryVenueEnvironment;
+  seed?: number;
+  startAt?: Date | string;
+};
+
 export type VenueApiApp = {
-  demoPairId: string;
-  environment: MemoryVenueEnvironment;
+  readonly demoPairId: string;
+  readonly environment: MemoryVenueEnvironment;
   handleRequest: (request: ApiRequest) => Promise<ApiReply>;
+  resetDemoState: (input: { mode: DemoMode; seed?: number }) => Promise<DemoStatusResponse>;
 };
 
 const createReply = (status: number, body: unknown): ApiReply => ({
@@ -59,7 +74,7 @@ const handleError = (error: unknown): ApiReply => {
   }
 
   if (error instanceof DomainError) {
-    return createReply(409, {
+    return createReply(error.code === "MISSING_ENTITLEMENT" ? 403 : 409, {
       code: error.code,
       message: error.message
     });
@@ -84,40 +99,95 @@ const handleError = (error: unknown): ApiReply => {
 
 const parseBody = <T>(value: unknown, parser: (input: unknown) => T): T => parser(value ?? {});
 
-const seedDemoState = async (environment: MemoryVenueEnvironment): Promise<string> => {
-  const pair = await environment.application.createPair({
-    actorId: "operator-demo",
-    operatorId: "operator-demo",
-    dealerId: "dealer-alpha",
-    jurisdiction: "US",
-    pairId: "pair-demo",
-    rulebookSummary: "initial",
-    rulebookVersion: "v1"
-  });
+const isVenueApiAppOptions = (value: unknown): value is VenueApiAppOptions =>
+  value !== null &&
+  typeof value === "object" &&
+  ("bootstrapMode" in value || "environment" in value || "seed" in value || "startAt" in value);
 
-  await environment.application.grantAccess({
-    actorId: "operator-demo",
-    pairId: pair.pairId,
-    subjectId: "subscriber-1",
-    role: "subscriber"
-  });
+const toBootstrapMode = (mode: DemoMode | undefined): Phase1DemoMode => mode ?? "phase1-ready";
 
-  return pair.pairId;
-};
+const createEnvironment = (options: VenueApiAppOptions): MemoryVenueEnvironment =>
+  createMemoryVenueEnvironment({
+    seed: options.seed ?? 424242,
+    ...(options.startAt !== undefined ? { startAt: options.startAt } : {})
+  });
 
 export const createVenueApiApp = async (
-  environment: MemoryVenueEnvironment = createMemoryVenueEnvironment()
+  input?: MemoryVenueEnvironment | VenueApiAppOptions
 ): Promise<VenueApiApp> => {
-  const demoPairId =
-    (await environment.application.listPairs())[0]?.pairId ?? (await seedDemoState(environment));
+  const options =
+    input === undefined ? {} : isVenueApiAppOptions(input) ? input : { environment: input };
+  const state = {
+    environment: options.environment ?? createEnvironment(options),
+    mode: toBootstrapMode(options.bootstrapMode),
+    seed: options.seed ?? 424242,
+    startAt: options.startAt
+  };
+
+  const buildDemoStatus = (): DemoStatusResponse => ({
+    currentTime: state.environment.clock.now().toISOString(),
+    dealerId: phase1DemoDefaults.dealerId,
+    mode: state.mode,
+    operatorId: phase1DemoDefaults.operatorId,
+    pairId: phase1DemoDefaults.pairId,
+    seed: state.seed,
+    subscriberId: phase1DemoDefaults.subscriberId
+  });
+
+  const resetDemoState = async (next: {
+    mode: DemoMode;
+    seed?: number;
+  }): Promise<DemoStatusResponse> => {
+    state.mode = next.mode;
+    state.seed = next.seed ?? state.seed;
+    state.environment = createMemoryVenueEnvironment({
+      seed: state.seed,
+      ...(state.startAt !== undefined ? { startAt: state.startAt } : {})
+    });
+
+    await seedPhase1DemoEnvironment(state.environment, {
+      mode: state.mode,
+      seed: state.seed
+    });
+
+    return buildDemoStatus();
+  };
+
+  if (options.environment === undefined) {
+    await resetDemoState({
+      mode: state.mode,
+      seed: state.seed
+    });
+  } else {
+    state.mode = options.bootstrapMode ?? "empty";
+  }
 
   const handleRequest = async (request: ApiRequest): Promise<ApiReply> => {
     const url = new URL(request.url, "http://127.0.0.1:4301");
 
     try {
+      if (request.method === "GET" && url.pathname === "/demo/status") {
+        return createReply(200, buildDemoStatus());
+      }
+
+      if (request.method === "POST" && url.pathname === "/demo/reset") {
+        return createReply(
+          200,
+          await resetDemoState(parseBody(request.body, parseDemoResetRequest))
+        );
+      }
+
+      if (request.method === "POST" && url.pathname === "/demo/clock/advance") {
+        const body = parseBody(request.body, (value) => demoClockAdvanceRequestSchema.parse(value));
+
+        state.environment.clock.advanceBy(body.milliseconds);
+
+        return createReply(200, buildDemoStatus());
+      }
+
       if (request.method === "GET" && url.pathname === "/health") {
-        const pairId = url.searchParams.get("pairId") ?? demoPairId;
-        const venue = await environment.application.getVenueHealth(pairId);
+        const pairId = url.searchParams.get("pairId") ?? buildDemoStatus().pairId;
+        const venue = await state.environment.application.getVenueHealth(pairId);
 
         if (venue === null) {
           return createReply(404, {
@@ -127,7 +197,7 @@ export const createVenueApiApp = async (
 
         const response: HealthResponse = {
           service: "venue-api",
-          generatedAt: environment.clock.now().toISOString(),
+          generatedAt: state.environment.clock.now().toISOString(),
           venue
         };
 
@@ -136,11 +206,12 @@ export const createVenueApiApp = async (
 
       if (request.method === "POST" && url.pathname === "/pairs") {
         const body = parseBody(request.body, parseCreatePairRequest);
-        const pair = await environment.application.createPair({
+        const pair = await state.environment.application.createPair({
           actorId: getActorId(request, url),
           operatorId: body.operatorId,
           dealerId: body.dealerId,
           jurisdiction: body.jurisdiction,
+          ...(body.pairId !== undefined ? { pairId: body.pairId } : {}),
           rulebookSummary: body.rulebookSummary,
           rulebookVersion: body.rulebookVersion
         });
@@ -161,7 +232,7 @@ export const createVenueApiApp = async (
 
         return createReply(
           201,
-          await environment.application.grantAccess({
+          await state.environment.application.grantAccess({
             actorId: getActorId(request, url),
             pairId,
             subjectId: body.subjectId,
@@ -176,7 +247,7 @@ export const createVenueApiApp = async (
 
         return createReply(
           200,
-          await environment.application.pausePair({
+          await state.environment.application.pausePair({
             actorId: getActorId(request, url),
             pairId,
             state: body.state,
@@ -190,7 +261,7 @@ export const createVenueApiApp = async (
 
         return createReply(
           201,
-          await environment.application.openRfq({
+          await state.environment.application.openRfq({
             actorId: getActorId(request, url),
             pairId,
             instrumentId: body.instrumentId,
@@ -210,7 +281,7 @@ export const createVenueApiApp = async (
 
         return createReply(
           200,
-          await environment.application.rejectRfq({
+          await state.environment.application.rejectRfq({
             actorId: getActorId(request, url),
             pairId,
             rfqId: path[3],
@@ -227,7 +298,7 @@ export const createVenueApiApp = async (
       ) {
         return createReply(
           200,
-          await environment.application.cancelRfq({
+          await state.environment.application.cancelRfq({
             actorId: getActorId(request, url),
             pairId,
             rfqId: path[3]
@@ -245,7 +316,7 @@ export const createVenueApiApp = async (
 
         return createReply(
           201,
-          await environment.application.submitQuote({
+          await state.environment.application.submitQuote({
             actorId: getActorId(request, url),
             pairId,
             rfqId: path[3],
@@ -262,7 +333,7 @@ export const createVenueApiApp = async (
         path[3] !== undefined &&
         path[4] === "accept"
       ) {
-        const quote = await environment.ledger.getQuote(path[3]);
+        const quote = await state.environment.ledger.getQuote(path[3]);
 
         if (quote === null) {
           return createReply(404, {
@@ -272,7 +343,7 @@ export const createVenueApiApp = async (
 
         return createReply(
           200,
-          await environment.application.acceptQuote({
+          await state.environment.application.acceptQuote({
             actorId: getActorId(request, url),
             pairId,
             rfqId: quote.rfqId,
@@ -293,7 +364,7 @@ export const createVenueApiApp = async (
 
         return createReply(
           200,
-          await environment.application.markSettlementProgression({
+          await state.environment.application.markSettlementProgression({
             actorId: getActorId(request, url),
             pairId,
             instructionId: path[3],
@@ -303,7 +374,10 @@ export const createVenueApiApp = async (
       }
 
       if (request.method === "GET" && path[2] === "views" && path[3] === "operator") {
-        const view = await environment.application.getOperatorView(pairId);
+        const view = await state.environment.application.getOperatorView(
+          pairId,
+          getActorId(request, url)
+        );
 
         return view === null
           ? createReply(404, { message: `Pair ${pairId} was not found.` })
@@ -317,7 +391,11 @@ export const createVenueApiApp = async (
           throw new ContractValidationError("$.subscriberId", "is required");
         }
 
-        const view = await environment.application.getSubscriberView(pairId, subscriberId);
+        const view = await state.environment.application.getSubscriberView(
+          pairId,
+          subscriberId,
+          getActorId(request, url)
+        );
 
         return view === null
           ? createReply(404, { message: `Pair ${pairId} was not found.` })
@@ -331,7 +409,11 @@ export const createVenueApiApp = async (
           throw new ContractValidationError("$.dealerId", "is required");
         }
 
-        const view = await environment.application.getDealerWorkbenchView(pairId, dealerId);
+        const view = await state.environment.application.getDealerWorkbenchView(
+          pairId,
+          dealerId,
+          getActorId(request, url)
+        );
 
         return view === null
           ? createReply(404, { message: `Pair ${pairId} was not found.` })
@@ -339,7 +421,10 @@ export const createVenueApiApp = async (
       }
 
       if (request.method === "GET" && path[2] === "audit-trail") {
-        const view = await environment.application.getAuditTrail(pairId);
+        const view = await state.environment.application.getAuditTrail(
+          pairId,
+          getActorId(request, url)
+        );
 
         return view === null
           ? createReply(404, { message: `Pair ${pairId} was not found.` })
@@ -353,8 +438,13 @@ export const createVenueApiApp = async (
   };
 
   return {
-    demoPairId,
-    environment,
-    handleRequest
+    get demoPairId() {
+      return buildDemoStatus().pairId;
+    },
+    get environment() {
+      return state.environment;
+    },
+    handleRequest,
+    resetDemoState
   };
 };

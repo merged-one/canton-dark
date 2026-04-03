@@ -244,6 +244,74 @@ const ensureDealerOwnsRfq = (rfq: RFQSession, actorId: string): void => {
   }
 };
 
+const ensureActorCanViewOperatorScope = (pair: PairInstance, actorId: string): void => {
+  if (pair.operatorId !== actorId) {
+    throw createDomainError(
+      "MISSING_ENTITLEMENT",
+      `Only the pair operator may access the operator view for pair ${pair.pairId}.`,
+      {
+        actorId,
+        operatorId: pair.operatorId,
+        pairId: pair.pairId
+      }
+    );
+  }
+};
+
+const ensureActorCanViewSubscriberScope = (
+  pair: PairInstance,
+  grants: readonly AccessGrant[],
+  actorId: string,
+  subscriberId: string
+): void => {
+  if (actorId !== subscriberId) {
+    throw createDomainError(
+      "MISSING_ENTITLEMENT",
+      `Only subscriber ${subscriberId} may access the subscriber view for pair ${pair.pairId}.`,
+      {
+        actorId,
+        pairId: pair.pairId,
+        subscriberId
+      }
+    );
+  }
+
+  ensureActorEntitled(pair, grants, actorId, "view_pair");
+};
+
+const ensureActorCanViewDealerScope = (
+  pair: PairInstance,
+  grants: readonly AccessGrant[],
+  actorId: string,
+  dealerId: string
+): void => {
+  if (actorId !== dealerId) {
+    throw createDomainError(
+      "MISSING_ENTITLEMENT",
+      `Only dealer ${dealerId} may access the dealer workbench for pair ${pair.pairId}.`,
+      {
+        actorId,
+        dealerId,
+        pairId: pair.pairId
+      }
+    );
+  }
+
+  ensureActorEntitled(pair, grants, actorId, "view_pair");
+};
+
+const ensureActorCanViewAuditTrail = (
+  pair: PairInstance,
+  grants: readonly AccessGrant[],
+  actorId: string
+): void => {
+  if (actorId === pair.operatorId) {
+    return;
+  }
+
+  ensureActorEntitled(pair, grants, actorId, "view_audit");
+};
+
 const loadPairSnapshot = async (dependencies: VenueApplicationDependencies, pairId: string) => {
   const pair = await requirePair(dependencies.ledger, pairId);
   const [grants, rfqs, quotes, executions, settlements] = await Promise.all([
@@ -648,7 +716,7 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
 
   const listPairs = async (): Promise<readonly PairInstance[]> => dependencies.ledger.listPairs();
 
-  const getOperatorView = async (pairId: string): Promise<OperatorView | null> => {
+  const getOperatorView = async (pairId: string, actorId: string): Promise<OperatorView | null> => {
     const pair = await dependencies.ledger.getPair(pairId);
 
     if (pair === null) {
@@ -657,12 +725,15 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
 
     const snapshot = await loadPairSnapshot(dependencies, pairId);
 
+    ensureActorCanViewOperatorScope(snapshot.pair, actorId);
+
     return projectOperatorView(snapshot);
   };
 
   const getSubscriberView = async (
     pairId: string,
-    subscriberId: string
+    subscriberId: string,
+    actorId: string
   ): Promise<SubscriberView | null> => {
     const pair = await dependencies.ledger.getPair(pairId);
 
@@ -672,6 +743,8 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
 
     const snapshot = await loadPairSnapshot(dependencies, pairId);
 
+    ensureActorCanViewSubscriberScope(snapshot.pair, snapshot.grants, actorId, subscriberId);
+
     return projectSubscriberView({
       ...snapshot,
       subscriberId
@@ -680,7 +753,8 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
 
   const getDealerWorkbenchView = async (
     pairId: string,
-    dealerId: string
+    dealerId: string,
+    actorId: string
   ): Promise<DealerWorkbenchView | null> => {
     const pair = await dependencies.ledger.getPair(pairId);
 
@@ -689,6 +763,8 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
     }
 
     const snapshot = await loadPairSnapshot(dependencies, pairId);
+
+    ensureActorCanViewDealerScope(snapshot.pair, snapshot.grants, actorId, dealerId);
 
     return projectDealerWorkbenchView({
       pair: snapshot.pair,
@@ -699,12 +775,14 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
     });
   };
 
-  const getAuditTrail = async (pairId: string): Promise<AuditTrailView | null> => {
+  const getAuditTrail = async (pairId: string, actorId: string): Promise<AuditTrailView | null> => {
     const pair = await dependencies.ledger.getPair(pairId);
 
     if (pair === null) {
       return null;
     }
+
+    ensureActorCanViewAuditTrail(pair, await dependencies.ledger.listAccessGrants(pairId), actorId);
 
     return projectAuditTrail(pairId, await dependencies.auditLog.list(pairId));
   };

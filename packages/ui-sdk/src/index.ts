@@ -1,37 +1,29 @@
-import type { HealthResponse } from "@canton-dark/api-contracts";
-import { joinList, statusToneClass } from "@canton-dark/ui-kit";
-
-const escapeHtml = (value: string): string =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-
-export const renderVenueHealthHtml = (response: HealthResponse): string => {
-  const violationsMarkup =
-    response.venue.violations.length === 0
-      ? "<p data-testid='violations'>No policy violations.</p>"
-      : `<ul data-testid='violations'>${response.venue.violations
-          .map((violation) => `<li>${escapeHtml(violation)}</li>`)
-          .join("")}</ul>`;
-
-  return `
-    <article data-testid="health-card" class="${statusToneClass(response.venue.status)}">
-      <h2>${escapeHtml(response.venue.title)}</h2>
-      <p>${escapeHtml(response.venue.detail)}</p>
-      <p>Pair: ${escapeHtml(response.venue.summary.pairId)}</p>
-      <p>Rulebook: ${escapeHtml(response.venue.summary.rulebookVersion)}</p>
-      <p>Active participants: ${response.venue.summary.activeParticipantCount}</p>
-      <p>Dealers: ${escapeHtml(joinList(response.venue.summary.dealers))}</p>
-      <p>On-ledger: ${escapeHtml(joinList(response.venue.summary.ledgerFacts))}</p>
-      <p>Off-ledger: ${escapeHtml(joinList(response.venue.summary.offLedgerFacts))}</p>
-      ${violationsMarkup}
-    </article>
-  `;
-};
-
-export const mountVenueHealth = (target: HTMLElement, response: HealthResponse): void => {
-  target.innerHTML = renderVenueHealthHtml(response);
-};
+export {
+  buildRoleUrl,
+  demoIdentities,
+  frontendOrigins,
+  resolvePairId,
+  resolveSession,
+  saveSession,
+  type DemoIdentity,
+  type DemoRole,
+  type DemoSession,
+  type LocationLike
+} from "./auth";
+export { createVenueApiClient, VenueApiClientError, type VenueApiClient } from "./api-client";
+export { mountDealerWorkbench } from "./dealer-workbench";
+export { mountDemoOrchestrator } from "./demo-orchestrator";
+export { mountOperatorConsole } from "./operator-console";
+export {
+  dealerMetrics,
+  humanize,
+  latestOpenDealerRfq,
+  latestOpenSubscriberQuote,
+  operatorMetrics,
+  renderActionButton,
+  renderCode,
+  renderStatus,
+  subscriberMetrics
+} from "./render-helpers";
+export { mountSubscriberTerminal } from "./subscriber-terminal";
+export { readValue, resolveApiBaseUrl, toErrorMessage, type AppBootOptions } from "./shared";

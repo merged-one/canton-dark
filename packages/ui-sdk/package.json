@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@canton-dark/api-contracts": "workspace:*",
+    "@canton-dark/query-models": "workspace:*",
     "@canton-dark/ui-kit": "workspace:*"
   }
 }

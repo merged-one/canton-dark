@@ -12,6 +12,7 @@ export type CreatePairRequest = {
   jurisdiction: string;
   mode: "SingleDealerPair";
   operatorId: string;
+  pairId?: string;
   rulebookSummary: string;
   rulebookVersion: string;
 };
@@ -51,6 +52,27 @@ export type HealthResponse = {
   generatedAt: string;
   service: "venue-api";
   venue: VenueHealthReadModel;
+};
+
+export type DemoMode = "empty" | "phase1-complete" | "phase1-ready";
+
+export type DemoResetRequest = {
+  mode: DemoMode;
+  seed?: number;
+};
+
+export type DemoClockAdvanceRequest = {
+  milliseconds: number;
+};
+
+export type DemoStatusResponse = {
+  currentTime: string;
+  dealerId: string;
+  mode: DemoMode;
+  operatorId: string;
+  pairId: string;
+  seed: number;
+  subscriberId: string;
 };
 
 export type OpenApiSchema = {
@@ -327,6 +349,7 @@ export const createPairRequestSchema = objectSchema<CreatePairRequest>({
   mode: enumSchema(["SingleDealerPair"]),
   operatorId: stringSchema(),
   dealerId: stringSchema(),
+  pairId: optionalSchema(stringSchema()),
   jurisdiction: stringSchema(),
   rulebookVersion: stringSchema(),
   rulebookSummary: stringSchema()
@@ -370,11 +393,50 @@ export const healthResponseSchema = objectSchema<HealthResponse>({
   venue: venueHealthSchema
 });
 
+export const demoResetRequestSchema = objectSchema<DemoResetRequest>({
+  mode: enumSchema(["empty", "phase1-complete", "phase1-ready"]),
+  seed: optionalSchema(numberSchema())
+});
+
+export const demoClockAdvanceRequestSchema = objectSchema<DemoClockAdvanceRequest>({
+  milliseconds: numberSchema()
+});
+
+export const demoStatusResponseSchema = objectSchema<DemoStatusResponse>({
+  currentTime: stringSchema(),
+  mode: enumSchema(["empty", "phase1-complete", "phase1-ready"]),
+  seed: numberSchema(),
+  pairId: stringSchema(),
+  operatorId: stringSchema(),
+  dealerId: stringSchema(),
+  subscriberId: stringSchema()
+});
+
 export const parseCreatePairRequest = (value: unknown): CreatePairRequest =>
   createPairRequestSchema.parse(value);
 
 export const parseHealthResponse = (value: unknown): HealthResponse =>
   healthResponseSchema.parse(value);
+
+export const parseOperatorView = (value: unknown): OperatorView => operatorViewSchema.parse(value);
+
+export const parseSubscriberView = (value: unknown): SubscriberView =>
+  subscriberViewSchema.parse(value);
+
+export const parseDealerWorkbenchView = (value: unknown): DealerWorkbenchView =>
+  dealerWorkbenchViewSchema.parse(value);
+
+export const parseAuditTrailView = (value: unknown): AuditTrailView =>
+  auditTrailViewSchema.parse(value);
+
+export const parseDemoResetRequest = (value: unknown): DemoResetRequest =>
+  demoResetRequestSchema.parse(value);
+
+export const parseDemoClockAdvanceRequest = (value: unknown): DemoClockAdvanceRequest =>
+  demoClockAdvanceRequestSchema.parse(value);
+
+export const parseDemoStatusResponse = (value: unknown): DemoStatusResponse =>
+  demoStatusResponseSchema.parse(value);
 
 export const contractSchemas = {
   CreatePairRequest: createPairRequestSchema,
@@ -389,7 +451,10 @@ export const contractSchemas = {
   DealerWorkbenchView: dealerWorkbenchViewSchema,
   AuditTrailView: auditTrailViewSchema,
   VenueHealthReadModel: venueHealthSchema,
-  HealthResponse: healthResponseSchema
+  HealthResponse: healthResponseSchema,
+  DemoResetRequest: demoResetRequestSchema,
+  DemoClockAdvanceRequest: demoClockAdvanceRequestSchema,
+  DemoStatusResponse: demoStatusResponseSchema
 } as const;
 
 const ref = (name: keyof typeof contractSchemas) => ({

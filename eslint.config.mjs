@@ -102,7 +102,8 @@ export default tseslint.config(
     [
       "apps/operator-console/src/**/*.{ts,tsx}",
       "apps/subscriber-terminal/src/**/*.{ts,tsx}",
-      "apps/dealer-workbench/src/**/*.{ts,tsx}"
+      "apps/dealer-workbench/src/**/*.{ts,tsx}",
+      "apps/demo-orchestrator/src/**/*.{ts,tsx}"
     ],
     [
       "@canton-dark/adapters-*",
@@ -113,7 +114,7 @@ export default tseslint.config(
     ]
   ),
   makeRestriction(
-    ["apps/venue-api/src/**/*.{ts,tsx}", "apps/demo-orchestrator/src/**/*.{ts,tsx}"],
+    ["apps/venue-api/src/**/*.{ts,tsx}"],
     ["@canton-dark/ui-kit", "@canton-dark/ui-sdk"]
   )
 );
