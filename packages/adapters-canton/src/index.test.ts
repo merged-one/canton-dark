@@ -6,7 +6,10 @@ import {
   type AuditRecord,
   type DealerInvitation,
   type DealerQuote,
+  type DarkOrder,
   type ExecutionTicket,
+  type MatchProposal,
+  type OrderLock,
   type QuoteRevision,
   type QuoteWithdrawal,
   type RFQSession,
@@ -22,7 +25,11 @@ import {
   mapAuditRecordToCantonCommand,
   mapCancelRfqCommand,
   mapDealerInvitationToCantonCommand,
+  mapDarkOrderToCantonCommand,
+  mapExecutionTicketToCantonCommand,
+  mapMatchProposalToCantonCommand,
   mapOperatorApprovalToCantonCommand,
+  mapOrderLockToCantonCommand,
   mapPairToCantonCommand,
   mapPausePairCommand,
   mapPauseStateToCantonCommand,
@@ -31,7 +38,8 @@ import {
   mapQuoteWithdrawalToCantonCommand,
   mapRegulatoryAttestationToCantonCommand,
   mapRejectRfqCommand,
-  mapRulebookReleaseToCantonCommand
+  mapRulebookReleaseToCantonCommand,
+  mapSettlementInstructionToCantonCommand
 } from "./index";
 
 const createdAt = "2026-04-02T00:00:00.000Z";
@@ -151,6 +159,54 @@ const execution: ExecutionTicket = {
   acceptedAt: "2026-04-02T00:03:00.000Z"
 };
 
+const darkOrder: DarkOrder = {
+  orderId: "dark-order-1",
+  clientOrderId: "dark-client-1",
+  pairId: "pair-1",
+  subscriberId: "subscriber-1",
+  instrumentId: "CUSIP-1",
+  side: "buy",
+  quantity: 10,
+  limitPrice: 100.5,
+  createdAt: "2026-04-02T00:02:30.000Z",
+  updatedAt: "2026-04-02T00:02:30.000Z",
+  status: "open"
+};
+
+const orderLock: OrderLock = {
+  lockId: "lock-1",
+  pairId: "pair-1",
+  orderId: "dark-order-1",
+  proposalId: "proposal-1",
+  subscriberId: "subscriber-1",
+  lockedAt: "2026-04-02T00:02:45.000Z",
+  lockedBy: "operator-1",
+  lockExpiresAt: "2026-04-02T00:03:15.000Z",
+  updatedAt: "2026-04-02T00:02:45.000Z",
+  status: "active"
+};
+
+const matchProposal: MatchProposal = {
+  proposalId: "proposal-1",
+  pairId: "pair-1",
+  instrumentId: "CUSIP-1",
+  quantity: 10,
+  price: 100.5,
+  buyOrderId: "dark-order-1",
+  sellOrderId: "dark-order-2",
+  buySubscriberId: "subscriber-1",
+  sellSubscriberId: "subscriber-2",
+  buyLockId: "lock-1",
+  sellLockId: "lock-2",
+  buyResponse: "pending",
+  sellResponse: "pending",
+  createdAt: "2026-04-02T00:02:45.000Z",
+  createdBy: "operator-1",
+  expiresAt: "2026-04-02T00:03:15.000Z",
+  updatedAt: "2026-04-02T00:02:45.000Z",
+  status: "pending"
+};
+
 const settlement: SettlementInstruction = {
   instructionId: "settlement-1",
   executionId: "execution-1",
@@ -158,6 +214,35 @@ const settlement: SettlementInstruction = {
   status: "pending",
   createdAt: "2026-04-02T00:03:00.000Z",
   updatedAt: "2026-04-02T00:03:00.000Z"
+};
+
+const darkExecution: ExecutionTicket = {
+  executionId: "execution-dark-1",
+  executionKind: "dark_cross",
+  pairId: "pair-1",
+  matchProposalId: "proposal-1",
+  instrumentId: "CUSIP-1",
+  quantity: 10,
+  price: 100.5,
+  acceptedAt: "2026-04-02T00:03:30.000Z",
+  buyOrderId: "dark-order-1",
+  sellOrderId: "dark-order-2",
+  buySubscriberId: "subscriber-1",
+  sellSubscriberId: "subscriber-2"
+};
+
+const darkSettlement: SettlementInstruction = {
+  instructionId: "settlement-dark-1",
+  executionId: "execution-dark-1",
+  pairId: "pair-1",
+  status: "pending",
+  createdAt: "2026-04-02T00:03:30.000Z",
+  updatedAt: "2026-04-02T00:03:30.000Z",
+  settlementKind: "dark_cross",
+  matchProposalId: "proposal-1",
+  buyOrderId: "dark-order-1",
+  sellOrderId: "dark-order-2",
+  settlementAgentId: "settler-1"
 };
 
 describe("adapters-canton", () => {
@@ -301,12 +386,98 @@ describe("adapters-canton", () => {
         invitedBy: "subscriber-1",
         invitationVersion: 1,
         responseWindowClosesAt: "2026-04-02T00:05:00.000Z",
-        updatedAt: "2026-04-02T00:02:00.000Z",
         status: "responded",
         respondedAt: "2026-04-02T00:02:00.000Z",
         withdrawnAt: null,
         withdrawnBy: null,
         withdrawalReason: null
+      }
+    });
+    const openInvitation: DealerInvitation = {
+      ...invitation,
+      status: "open"
+    };
+    delete openInvitation.respondedAt;
+    expect(mapDealerInvitationToCantonCommand(openInvitation).payload.respondedAt).toBeNull();
+    expect(mapDarkOrderToCantonCommand(darkOrder)).toEqual({
+      action: "upsert_contract",
+      template: "DarkOrder",
+      key: "dark-order-1",
+      submitter: "subscriber-1",
+      observers: ["subscriber-1"],
+      payload: {
+        orderId: "dark-order-1",
+        clientOrderId: "dark-client-1",
+        pairId: "pair-1",
+        subscriberId: "subscriber-1",
+        instrumentId: "CUSIP-1",
+        side: "buy",
+        quantity: 10,
+        limitPrice: 100.5,
+        status: "open",
+        createdAt: "2026-04-02T00:02:30.000Z",
+        updatedAt: "2026-04-02T00:02:30.000Z",
+        expiresAt: null,
+        cancelledAt: null,
+        cancelledBy: null,
+        executedAt: null,
+        executionId: null
+      }
+    });
+    expect(mapOrderLockToCantonCommand(orderLock)).toEqual({
+      action: "upsert_contract",
+      template: "OrderLock",
+      key: "lock-1",
+      submitter: "operator-1",
+      observers: ["subscriber-1"],
+      payload: {
+        lockId: "lock-1",
+        pairId: "pair-1",
+        orderId: "dark-order-1",
+        proposalId: "proposal-1",
+        subscriberId: "subscriber-1",
+        lockedAt: "2026-04-02T00:02:45.000Z",
+        lockedBy: "operator-1",
+        lockExpiresAt: "2026-04-02T00:03:15.000Z",
+        status: "active",
+        updatedAt: "2026-04-02T00:02:45.000Z",
+        releasedAt: null,
+        releasedBy: null,
+        releaseReason: null
+      }
+    });
+    expect(mapMatchProposalToCantonCommand(matchProposal)).toEqual({
+      action: "upsert_contract",
+      template: "MatchProposal",
+      key: "proposal-1",
+      submitter: "operator-1",
+      observers: ["subscriber-1", "subscriber-2"],
+      payload: {
+        proposalId: "proposal-1",
+        pairId: "pair-1",
+        instrumentId: "CUSIP-1",
+        quantity: 10,
+        price: 100.5,
+        buyOrderId: "dark-order-1",
+        sellOrderId: "dark-order-2",
+        buySubscriberId: "subscriber-1",
+        sellSubscriberId: "subscriber-2",
+        buyLockId: "lock-1",
+        sellLockId: "lock-2",
+        buyResponse: "pending",
+        sellResponse: "pending",
+        status: "pending",
+        createdAt: "2026-04-02T00:02:45.000Z",
+        createdBy: "operator-1",
+        expiresAt: "2026-04-02T00:03:15.000Z",
+        updatedAt: "2026-04-02T00:02:45.000Z",
+        acceptedAt: null,
+        buyAcceptedAt: null,
+        sellAcceptedAt: null,
+        rejectedAt: null,
+        rejectedBy: null,
+        rejectionReason: null,
+        executionId: null
       }
     });
     expect(mapAcceptQuoteCommand(quote, "subscriber-1").choice).toBe("Accept");
@@ -342,6 +513,75 @@ describe("adapters-canton", () => {
         reason: "replaced"
       }
     });
+    const withdrawalWithoutReason: QuoteWithdrawal = { ...quoteWithdrawal };
+    delete withdrawalWithoutReason.reason;
+    expect(mapQuoteWithdrawalToCantonCommand(withdrawalWithoutReason).payload.reason).toBeNull();
+    expect(mapExecutionTicketToCantonCommand(darkExecution)).toEqual({
+      action: "upsert_contract",
+      template: "ExecutionTicket",
+      key: "execution-dark-1",
+      submitter: "subscriber-1",
+      observers: ["subscriber-1", "subscriber-2"],
+      payload: {
+        pairId: "pair-1",
+        executionKind: "dark_cross",
+        rfqId: null,
+        quoteId: null,
+        dealerId: null,
+        subscriberId: null,
+        instrumentId: "CUSIP-1",
+        side: null,
+        quantity: 10,
+        price: 100.5,
+        acceptedAt: "2026-04-02T00:03:30.000Z",
+        matchProposalId: "proposal-1",
+        buyOrderId: "dark-order-1",
+        sellOrderId: "dark-order-2",
+        buySubscriberId: "subscriber-1",
+        sellSubscriberId: "subscriber-2"
+      }
+    });
+    const sellSubmittedExecution: ExecutionTicket = {
+      ...darkExecution,
+      sellSubscriberId: "subscriber-2"
+    };
+    delete sellSubmittedExecution.buySubscriberId;
+    expect(mapExecutionTicketToCantonCommand(sellSubmittedExecution).submitter).toBe(
+      "subscriber-2"
+    );
+    const systemSubmittedExecution: ExecutionTicket = { ...darkExecution };
+    delete systemSubmittedExecution.buySubscriberId;
+    delete systemSubmittedExecution.sellSubscriberId;
+    expect(mapExecutionTicketToCantonCommand(systemSubmittedExecution).submitter).toBe("system");
+    expect(mapSettlementInstructionToCantonCommand(darkSettlement)).toEqual({
+      action: "upsert_contract",
+      template: "SettlementInstruction",
+      key: "settlement-dark-1",
+      submitter: "settler-1",
+      observers: [],
+      payload: {
+        pairId: "pair-1",
+        executionId: "execution-dark-1",
+        status: "pending",
+        createdAt: "2026-04-02T00:03:30.000Z",
+        updatedAt: "2026-04-02T00:03:30.000Z",
+        settlementKind: "dark_cross",
+        matchProposalId: "proposal-1",
+        buyOrderId: "dark-order-1",
+        sellOrderId: "dark-order-2",
+        subscriberId: null,
+        sellSubscriberId: null,
+        dealerId: null,
+        settlementAgentId: "settler-1"
+      }
+    });
+    expect(
+      mapSettlementInstructionToCantonCommand({
+        ...settlement,
+        subscriberId: "subscriber-1",
+        dealerId: "dealer-alpha"
+      }).observers
+    ).toEqual(["subscriber-1", "dealer-alpha"]);
     expect(mapProgressSettlementCommand(settlement, "operator-1", "affirmed").payload.status).toBe(
       "affirmed"
     );
@@ -386,13 +626,19 @@ describe("adapters-canton", () => {
     expect(await ledger.getPair("missing")).toBeNull();
     expect(await ledger.getRfq("missing")).toBeNull();
     expect(await ledger.getQuote("missing")).toBeNull();
+    expect(await ledger.getDarkOrder("missing")).toBeNull();
+    expect(await ledger.getOrderLock("missing")).toBeNull();
+    expect(await ledger.getMatchProposal("missing")).toBeNull();
     expect(await ledger.getExecutionTicket("missing")).toBeNull();
     expect(await ledger.getSettlementInstruction("missing")).toBeNull();
     expect(await ledger.listPairs()).toEqual([]);
     expect(await ledger.listAccessGrants("missing")).toEqual([]);
     expect(await ledger.listRfqs("missing")).toEqual([]);
     expect(await ledger.listQuotes("missing")).toEqual([]);
+    expect(await ledger.listDarkOrders("missing")).toEqual([]);
     expect(await ledger.listInvitations("missing")).toEqual([]);
+    expect(await ledger.listOrderLocks("missing")).toEqual([]);
+    expect(await ledger.listMatchProposals("missing")).toEqual([]);
     expect(await ledger.listQuoteRevisions("missing")).toEqual([]);
     expect(await ledger.listQuoteWithdrawals("missing")).toEqual([]);
     expect(await ledger.listExecutionTickets("missing")).toEqual([]);
@@ -408,7 +654,10 @@ describe("adapters-canton", () => {
     await ledger.saveAccessGrant(grant);
     await ledger.saveRfq(rfq);
     await ledger.saveQuote(quote);
+    await ledger.saveDarkOrder(darkOrder);
     await ledger.saveInvitation(invitation);
+    await ledger.saveOrderLock(orderLock);
+    await ledger.saveMatchProposal(matchProposal);
     await ledger.saveQuoteRevision(quoteRevision);
     await ledger.saveQuoteWithdrawal(quoteWithdrawal);
     await ledger.saveExecutionTicket(execution);
@@ -417,13 +666,19 @@ describe("adapters-canton", () => {
 
     expect(await ledger.getPair("pair-1")).toEqual(pair);
     expect(await ledger.getQuote("quote-1")).toEqual(quote);
+    expect(await ledger.getDarkOrder("dark-order-1")).toEqual(darkOrder);
+    expect(await ledger.getOrderLock("lock-1")).toEqual(orderLock);
+    expect(await ledger.getMatchProposal("proposal-1")).toEqual(matchProposal);
     expect(await ledger.getExecutionTicket("execution-1")).toEqual(execution);
     expect(await ledger.getSettlementInstruction("settlement-1")).toEqual(settlement);
     expect(await ledger.listPairs()).toEqual([pair]);
     expect(await ledger.listAccessGrants("pair-1")).toEqual([grant]);
     expect(await ledger.listRfqs("pair-1")).toEqual([rfq]);
     expect(await ledger.listQuotes("pair-1")).toEqual([quote]);
+    expect(await ledger.listDarkOrders("pair-1")).toEqual([darkOrder]);
     expect(await ledger.listInvitations("pair-1")).toEqual([invitation]);
+    expect(await ledger.listOrderLocks("pair-1")).toEqual([orderLock]);
+    expect(await ledger.listMatchProposals("pair-1")).toEqual([matchProposal]);
     expect(await ledger.listQuoteRevisions("pair-1")).toEqual([quoteRevision]);
     expect(await ledger.listQuoteWithdrawals("pair-1")).toEqual([quoteWithdrawal]);
     expect(await ledger.listExecutionTickets("pair-1")).toEqual([execution]);
@@ -439,7 +694,10 @@ describe("adapters-canton", () => {
       "AccessGrant",
       "RFQSession",
       "DealerQuote",
+      "DarkOrder",
       "DealerInvitation",
+      "OrderLock",
+      "MatchProposal",
       "QuoteRevision",
       "QuoteWithdrawal",
       "ExecutionTicket",

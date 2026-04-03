@@ -4,7 +4,10 @@ import type {
   AuditRecord,
   DealerInvitation,
   DealerQuote,
+  DarkOrder,
   ExecutionTicket,
+  MatchProposal,
+  OrderLock,
   PairInstance,
   QuoteRevision,
   QuoteWithdrawal,
@@ -248,23 +251,119 @@ export const mapQuoteWithdrawalToCantonCommand = (withdrawal: QuoteWithdrawal): 
   }
 });
 
+export const mapDarkOrderToCantonCommand = (order: DarkOrder): CantonCommand => ({
+  action: "upsert_contract",
+  template: "DarkOrder",
+  key: order.orderId,
+  submitter: order.subscriberId,
+  observers: [order.subscriberId],
+  payload: {
+    orderId: order.orderId,
+    clientOrderId: order.clientOrderId,
+    pairId: order.pairId,
+    subscriberId: order.subscriberId,
+    instrumentId: order.instrumentId,
+    side: order.side,
+    quantity: order.quantity,
+    limitPrice: order.limitPrice,
+    status: order.status,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt,
+    expiresAt: order.expiresAt ?? null,
+    cancelledAt: order.cancelledAt ?? null,
+    cancelledBy: order.cancelledBy ?? null,
+    executedAt: order.executedAt ?? null,
+    executionId: order.executionId ?? null
+  }
+});
+
+export const mapOrderLockToCantonCommand = (lock: OrderLock): CantonCommand => ({
+  action: "upsert_contract",
+  template: "OrderLock",
+  key: lock.lockId,
+  submitter: lock.lockedBy,
+  observers: [lock.subscriberId],
+  payload: {
+    lockId: lock.lockId,
+    pairId: lock.pairId,
+    orderId: lock.orderId,
+    proposalId: lock.proposalId,
+    subscriberId: lock.subscriberId,
+    lockedAt: lock.lockedAt,
+    lockedBy: lock.lockedBy,
+    lockExpiresAt: lock.lockExpiresAt,
+    status: lock.status,
+    updatedAt: lock.updatedAt,
+    releasedAt: lock.releasedAt ?? null,
+    releasedBy: lock.releasedBy ?? null,
+    releaseReason: lock.releaseReason ?? null
+  }
+});
+
+export const mapMatchProposalToCantonCommand = (proposal: MatchProposal): CantonCommand => ({
+  action: "upsert_contract",
+  template: "MatchProposal",
+  key: proposal.proposalId,
+  submitter: proposal.createdBy,
+  observers: [proposal.buySubscriberId, proposal.sellSubscriberId],
+  payload: {
+    proposalId: proposal.proposalId,
+    pairId: proposal.pairId,
+    instrumentId: proposal.instrumentId,
+    quantity: proposal.quantity,
+    price: proposal.price,
+    buyOrderId: proposal.buyOrderId,
+    sellOrderId: proposal.sellOrderId,
+    buySubscriberId: proposal.buySubscriberId,
+    sellSubscriberId: proposal.sellSubscriberId,
+    buyLockId: proposal.buyLockId,
+    sellLockId: proposal.sellLockId,
+    buyResponse: proposal.buyResponse,
+    sellResponse: proposal.sellResponse,
+    status: proposal.status,
+    createdAt: proposal.createdAt,
+    createdBy: proposal.createdBy,
+    expiresAt: proposal.expiresAt,
+    updatedAt: proposal.updatedAt,
+    acceptedAt: proposal.acceptedAt ?? null,
+    buyAcceptedAt: proposal.buyAcceptedAt ?? null,
+    sellAcceptedAt: proposal.sellAcceptedAt ?? null,
+    rejectedAt: proposal.rejectedAt ?? null,
+    rejectedBy: proposal.rejectedBy ?? null,
+    rejectionReason: proposal.rejectionReason ?? null,
+    executionId: proposal.executionId ?? null
+  }
+});
+
 export const mapExecutionTicketToCantonCommand = (execution: ExecutionTicket): CantonCommand => ({
   action: "upsert_contract",
   template: "ExecutionTicket",
   key: execution.executionId,
-  submitter: execution.subscriberId,
-  observers: [execution.subscriberId, execution.dealerId],
+  submitter:
+    execution.subscriberId ?? execution.buySubscriberId ?? execution.sellSubscriberId ?? "system",
+  observers: [
+    execution.subscriberId,
+    execution.dealerId,
+    execution.buySubscriberId,
+    execution.sellSubscriberId
+  ].filter((party): party is string => typeof party === "string" && party.length > 0),
   payload: {
     pairId: execution.pairId,
-    rfqId: execution.rfqId,
-    quoteId: execution.quoteId,
-    dealerId: execution.dealerId,
-    subscriberId: execution.subscriberId,
+    executionKind: execution.executionKind ?? "rfq_quote",
+    rfqId: execution.rfqId ?? null,
+    quoteId: execution.quoteId ?? null,
+    dealerId: execution.dealerId ?? null,
+    subscriberId: execution.subscriberId ?? null,
     instrumentId: execution.instrumentId,
-    side: execution.side,
+    side: execution.side ?? null,
     quantity: execution.quantity,
     price: execution.price,
-    acceptedAt: execution.acceptedAt
+    acceptedAt: execution.acceptedAt,
+    matchProposalId: execution.matchProposalId ?? null,
+    buyOrderId: execution.buyOrderId ?? null,
+    sellOrderId: execution.sellOrderId ?? null,
+    buySubscriberId: execution.buySubscriberId ?? null,
+    sellSubscriberId: execution.sellSubscriberId ?? null
   }
 });
 
@@ -274,14 +373,28 @@ export const mapSettlementInstructionToCantonCommand = (
   action: "upsert_contract",
   template: "SettlementInstruction",
   key: instruction.instructionId,
-  submitter: "settlement-bridge",
-  observers: [],
+  submitter:
+    instruction.settlementAgentId ??
+    instruction.subscriberId ??
+    instruction.sellSubscriberId ??
+    "settlement-bridge",
+  observers: [instruction.subscriberId, instruction.sellSubscriberId, instruction.dealerId].filter(
+    (party): party is string => typeof party === "string" && party.length > 0
+  ),
   payload: {
     pairId: instruction.pairId,
     executionId: instruction.executionId,
     status: instruction.status,
     createdAt: instruction.createdAt,
-    updatedAt: instruction.updatedAt
+    updatedAt: instruction.updatedAt,
+    settlementKind: instruction.settlementKind ?? "rfq_quote",
+    matchProposalId: instruction.matchProposalId ?? null,
+    buyOrderId: instruction.buyOrderId ?? null,
+    sellOrderId: instruction.sellOrderId ?? null,
+    subscriberId: instruction.subscriberId ?? null,
+    sellSubscriberId: instruction.sellSubscriberId ?? null,
+    dealerId: instruction.dealerId ?? null,
+    settlementAgentId: instruction.settlementAgentId ?? null
   }
 });
 
@@ -406,15 +519,27 @@ export const createCantonLedgerPort = (transport: CantonTransport): LedgerPort =
   const invitations = new Map<string, DealerInvitation>();
   const quoteRevisions = new Map<string, QuoteRevision>();
   const quoteWithdrawals = new Map<string, QuoteWithdrawal>();
+  const darkOrders = new Map<string, DarkOrder>();
+  const orderLocks = new Map<string, OrderLock>();
+  const matchProposals = new Map<string, MatchProposal>();
   const executions = new Map<string, ExecutionTicket>();
   const settlements = new Map<string, SettlementInstruction>();
 
   return {
+    async getDarkOrder(orderId) {
+      return clone(darkOrders.get(orderId) ?? null);
+    },
     async getExecutionTicket(executionId) {
       return clone(executions.get(executionId) ?? null);
     },
+    async getMatchProposal(proposalId) {
+      return clone(matchProposals.get(proposalId) ?? null);
+    },
     async getPair(pairId) {
       return clone(pairs.get(pairId) ?? null);
+    },
+    async getOrderLock(lockId) {
+      return clone(orderLocks.get(lockId) ?? null);
     },
     async getQuote(quoteId) {
       return clone(quotes.get(quoteId) ?? null);
@@ -428,11 +553,20 @@ export const createCantonLedgerPort = (transport: CantonTransport): LedgerPort =
     async listAccessGrants(pairId) {
       return clone(accessGrants.get(pairId) ?? []);
     },
+    async listDarkOrders(pairId) {
+      return clone([...darkOrders.values()].filter((order) => order.pairId === pairId));
+    },
     async listExecutionTickets(pairId) {
       return clone([...executions.values()].filter((execution) => execution.pairId === pairId));
     },
     async listInvitations(pairId) {
       return clone([...invitations.values()].filter((invitation) => invitation.pairId === pairId));
+    },
+    async listMatchProposals(pairId) {
+      return clone([...matchProposals.values()].filter((proposal) => proposal.pairId === pairId));
+    },
+    async listOrderLocks(pairId) {
+      return clone([...orderLocks.values()].filter((lock) => lock.pairId === pairId));
     },
     async listPairs() {
       return clone([...pairs.values()]);
@@ -458,6 +592,10 @@ export const createCantonLedgerPort = (transport: CantonTransport): LedgerPort =
       await transport.submit(mapAccessGrantToCantonCommand(grant));
       accessGrants.set(grant.pairId, [...(accessGrants.get(grant.pairId) ?? []), clone(grant)]);
     },
+    async saveDarkOrder(order) {
+      await transport.submit(mapDarkOrderToCantonCommand(order));
+      darkOrders.set(order.orderId, clone(order));
+    },
     async saveExecutionTicket(execution) {
       await transport.submit(mapExecutionTicketToCantonCommand(execution));
       executions.set(execution.executionId, clone(execution));
@@ -465,6 +603,14 @@ export const createCantonLedgerPort = (transport: CantonTransport): LedgerPort =
     async saveInvitation(invitation) {
       await transport.submit(mapDealerInvitationToCantonCommand(invitation));
       invitations.set(invitation.invitationId, clone(invitation));
+    },
+    async saveMatchProposal(proposal) {
+      await transport.submit(mapMatchProposalToCantonCommand(proposal));
+      matchProposals.set(proposal.proposalId, clone(proposal));
+    },
+    async saveOrderLock(lock) {
+      await transport.submit(mapOrderLockToCantonCommand(lock));
+      orderLocks.set(lock.lockId, clone(lock));
     },
     async savePair(pair) {
       await transport.submit(mapOperatorApprovalToCantonCommand(pair));

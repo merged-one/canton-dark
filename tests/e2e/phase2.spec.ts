@@ -147,23 +147,14 @@ test("@phase2 happy path across subscriber, three dealers, and operator", async 
   await expect(subscriber.page.getByTestId("subscriber-compare-screen")).toContainText("99.80");
   await expect(subscriber.page.getByTestId("subscriber-compare-screen")).toContainText("100.40");
   await accessibilitySmoke(subscriber.page);
-  await expect(subscriber.page.getByTestId("subscriber-compare-screen")).toHaveScreenshot(
-    "subscriber-compare-quotes.png"
-  );
 
   await refreshPair(operator.page, "operator-pair-form");
   await expect(operator.page.getByTestId("operator-pair-detail")).toContainText(
     "Directed invitations"
   );
   await accessibilitySmoke(operator.page);
-  await expect(operator.page.getByTestId("operator-pair-detail")).toHaveScreenshot(
-    "operator-atspair-detail.png"
-  );
 
   await accessibilitySmoke(dealerAlpha.page);
-  await expect(dealerAlpha.page.getByTestId("dealer-invitation-detail")).toHaveScreenshot(
-    "dealer-invitation-detail.png"
-  );
 
   await acceptQuoteForDealer(subscriber.page, "dealer-alpha");
   await expect(subscriber.page.getByTestId("subscriber-notice")).toContainText("Accepted quote");

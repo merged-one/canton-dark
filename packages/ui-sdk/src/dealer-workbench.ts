@@ -17,6 +17,7 @@ import {
   dealerMetrics,
   formatCountdown,
   latestDealerInvitation,
+  latestOpenDealerRfq,
   latestDealerOpenQuote,
   renderActionButton,
   renderCode,
@@ -40,6 +41,7 @@ type DealerState = {
   price: string;
   quantity: string;
   selectedInvitationId: string | undefined;
+  selectedRfqId: string | undefined;
   serverNow: string;
   session: ReturnType<typeof resolveSession>;
   ttlMinutes: string;
@@ -103,6 +105,42 @@ const renderQuoteTable = (
           quantity: escapeHtml(String(quote.quantity)),
           status: renderStatus(quote.status),
           expiresAt: renderCode(quote.expiresAt)
+        }
+      }))
+  });
+
+const renderRfqTable = (view: DealerWorkbenchView, selectedRfqId: string | undefined): string =>
+  renderTable({
+    caption: "Inbound RFQs",
+    columns: [
+      { key: "rfqId", label: "RFQ" },
+      { key: "instrumentId", label: "Instrument" },
+      { key: "subscriberId", label: "Subscriber" },
+      { key: "side", label: "Side" },
+      { key: "quantity", label: "Quantity", numeric: true },
+      { key: "status", label: "Status" },
+      { key: "action", label: "Action" }
+    ],
+    emptyMessage: "No routed RFQs are visible for this dealer.",
+    rows: [...view.rfqs]
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map((rfq) => ({
+        id: rfq.rfqId,
+        cells: {
+          rfqId: renderCode(rfq.rfqId),
+          instrumentId: escapeHtml(rfq.instrumentId),
+          subscriberId: renderCode(rfq.subscriberId),
+          side: escapeHtml(rfq.side.toUpperCase()),
+          quantity: escapeHtml(String(rfq.quantity)),
+          status: renderStatus(rfq.status),
+          action:
+            selectedRfqId === rfq.rfqId
+              ? renderPill("Selected", "accent")
+              : renderActionButton({
+                  action: "select-rfq",
+                  id: rfq.rfqId,
+                  label: "Quote RFQ"
+                })
         }
       }))
   });
@@ -174,8 +212,8 @@ const renderExecutionTable = (view: DealerWorkbenchView): string =>
       id: execution.executionId,
       cells: {
         executionId: renderCode(execution.executionId),
-        quoteId: renderCode(execution.quoteId),
-        subscriberId: renderCode(execution.subscriberId),
+        quoteId: renderCode(execution.quoteId ?? "n/a"),
+        subscriberId: renderCode(execution.subscriberId ?? "n/a"),
         price: escapeHtml(execution.price.toFixed(2)),
         quantity: escapeHtml(String(execution.quantity))
       }
@@ -183,50 +221,43 @@ const renderExecutionTable = (view: DealerWorkbenchView): string =>
   });
 
 const renderDealerContent = (state: DealerState): string => {
+  const fallbackPair = {
+    approvalStatus: "approved" as const,
+    attestationStatus: "attested" as const,
+    dealerId: state.session.actorId,
+    mode: "SingleDealerPair" as const,
+    operatorId: "",
+    pairId: state.pairId,
+    paused: false,
+    rulebookVersion: ""
+  };
+  const fallbackHistory = {
+    pair: fallbackPair,
+    dealerId: state.session.actorId,
+    invitations: [],
+    quotes: [],
+    revisions: [],
+    withdrawals: []
+  };
+  const fallbackView = {
+    dealerId: state.session.actorId,
+    executions: [],
+    pair: fallbackPair,
+    quotes: [],
+    rfqs: []
+  };
   const selectedInvitation =
     state.history?.invitations.find(
       (invitation) => invitation.invitationId === state.selectedInvitationId
-    ) ??
-    latestDealerInvitation(
-      state.history ?? {
-        pair: {
-          approvalStatus: "approved",
-          attestationStatus: "attested",
-          dealerId: state.session.actorId,
-          mode: "SingleDealerPair",
-          operatorId: "",
-          pairId: state.pairId,
-          paused: false,
-          rulebookVersion: ""
-        },
-        dealerId: state.session.actorId,
-        invitations: [],
-        quotes: [],
-        revisions: [],
-        withdrawals: []
-      }
-    );
-  const selectedRfqId = selectedInvitation?.rfqId;
-  const currentOpenQuote = latestDealerOpenQuote(
-    state.history ?? {
-      pair: {
-        approvalStatus: "approved",
-        attestationStatus: "attested",
-        dealerId: state.session.actorId,
-        mode: "SingleDealerPair",
-        operatorId: "",
-        pairId: state.pairId,
-        paused: false,
-        rulebookVersion: ""
-      },
-      dealerId: state.session.actorId,
-      invitations: [],
-      quotes: [],
-      revisions: [],
-      withdrawals: []
-    },
-    selectedRfqId
-  );
+    ) ?? latestDealerInvitation(state.history ?? fallbackHistory);
+  const selectedRfq =
+    state.view?.rfqs.find((rfq) => rfq.rfqId === state.selectedRfqId) ??
+    (selectedInvitation === undefined
+      ? latestOpenDealerRfq(state.view ?? fallbackView)
+      : state.view?.rfqs.find((rfq) => rfq.rfqId === selectedInvitation.rfqId)) ??
+    latestOpenDealerRfq(state.view ?? fallbackView);
+  const selectedRfqId = selectedInvitation?.rfqId ?? selectedRfq?.rfqId;
+  const currentOpenQuote = latestDealerOpenQuote(state.history ?? fallbackHistory, selectedRfqId);
 
   const sessionCard = renderCard({
     title: "Role bootstrap",
@@ -276,7 +307,7 @@ const renderDealerContent = (state: DealerState): string => {
           </div>
           <div class="field">
             <label for="dealer-selected-rfq">RFQ</label>
-            <input id="dealer-selected-rfq" value="${escapeHtml(selectedRfqId ?? "")}" readonly />
+            <input id="dealer-selected-rfq" value="${escapeHtml(selectedRfq?.rfqId ?? "")}" readonly />
           </div>
           <div class="field">
             <label for="dealer-price">Price</label>
@@ -292,7 +323,7 @@ const renderDealerContent = (state: DealerState): string => {
           </div>
         </div>
         <div class="actions">
-          <button class="button button-primary" type="submit"${selectedInvitation === undefined ? " disabled" : ""}>
+          <button class="button button-primary" type="submit"${selectedRfq === undefined ? " disabled" : ""}>
             ${currentOpenQuote === undefined ? "Submit quote" : "Revise quote"}
           </button>
           <button class="button button-danger" type="button" data-action="withdraw-quote"${currentOpenQuote === undefined ? " disabled" : ""} data-id="${escapeHtml(currentOpenQuote?.quoteId ?? "")}">
@@ -325,26 +356,31 @@ const renderDealerContent = (state: DealerState): string => {
             ])}
             ${renderMetricGrid(dealerMetrics(state.view))}
             ${
-              selectedInvitation === undefined
+              selectedRfq === undefined
                 ? renderNotice(
-                    "Select an invitation to inspect its quote revisions and final disposition.",
+                    "Select a routed RFQ or invitation to inspect quote revisions and final disposition.",
                     "muted",
                     "dealer-rfq-summary"
                   )
                 : `
                     ${renderNotice(
-                      formatCountdown(state.serverNow, selectedInvitation.responseWindowClosesAt),
-                      selectedInvitation.status === "expired" ? "warn" : "accent",
+                      selectedInvitation === undefined
+                        ? `RFQ ${selectedRfq.rfqId} is selected for ${selectedRfq.quantity} units of ${selectedRfq.instrumentId}.`
+                        : formatCountdown(
+                            state.serverNow,
+                            selectedInvitation.responseWindowClosesAt
+                          ),
+                      selectedInvitation?.status === "expired" ? "warn" : "accent",
                       "dealer-rfq-summary"
                     )}
                     <div class="kv-grid" style="margin-top: 14px;">
                       <article class="kv-item">
-                        <span class="kv-key">Selected invitation</span>
-                        <span class="kv-value">${renderCode(selectedInvitation.invitationId)}</span>
+                        <span class="kv-key">${selectedInvitation === undefined ? "Selected RFQ" : "Selected invitation"}</span>
+                        <span class="kv-value">${selectedInvitation === undefined ? renderCode(selectedRfq.rfqId) : renderCode(selectedInvitation.invitationId)}</span>
                       </article>
                       <article class="kv-item">
                         <span class="kv-key">Status</span>
-                        <span class="kv-value">${renderStatus(selectedInvitation.status)}</span>
+                        <span class="kv-value">${renderStatus(selectedInvitation?.status ?? selectedRfq.status)}</span>
                       </article>
                       <article class="kv-item">
                         <span class="kv-key">Current quote</span>
@@ -353,6 +389,7 @@ const renderDealerContent = (state: DealerState): string => {
                     </div>
                   `
             }
+            <div style="margin-top: 16px;">${renderRfqTable(state.view, selectedRfqId)}</div>
             <div style="margin-top: 16px;">${renderInvitationTable(state.history, state.selectedInvitationId)}</div>
             <div style="margin-top: 16px;">${renderQuoteTable(state.history, selectedRfqId)}</div>
             <div style="margin-top: 16px;">${renderRevisionTable(state.history, selectedRfqId)}</div>
@@ -404,24 +441,45 @@ export const mountDealerWorkbench = async ({
     price: "100.50",
     quantity: "50",
     selectedInvitationId: undefined,
+    selectedRfqId: undefined,
     serverNow: demoStatus.currentTime,
     session: resolveSession("dealer", storage, location),
     ttlMinutes: "20",
     view: undefined
   };
 
-  const syncSelectedInvitation = (history: DealerInvitationHistoryView): void => {
+  const syncSelection = (view: DealerWorkbenchView, history: DealerInvitationHistoryView): void => {
     if (state.selectedInvitationId !== undefined) {
-      const stillVisible = history.invitations.some(
+      const selectedInvitation = history.invitations.find(
         (invitation) => invitation.invitationId === state.selectedInvitationId
       );
 
-      if (stillVisible) {
+      if (selectedInvitation !== undefined) {
+        state.selectedRfqId = selectedInvitation.rfqId;
         return;
       }
     }
 
-    state.selectedInvitationId = latestDealerInvitation(history)?.invitationId;
+    if (
+      state.selectedRfqId !== undefined &&
+      view.rfqs.some((rfq) => rfq.rfqId === state.selectedRfqId)
+    ) {
+      state.selectedInvitationId =
+        history.invitations.find((invitation) => invitation.rfqId === state.selectedRfqId)
+          ?.invitationId ?? state.selectedInvitationId;
+      return;
+    }
+
+    const latestInvitation = latestDealerInvitation(history);
+
+    if (latestInvitation !== undefined) {
+      state.selectedInvitationId = latestInvitation.invitationId;
+      state.selectedRfqId = latestInvitation.rfqId;
+      return;
+    }
+
+    state.selectedInvitationId = undefined;
+    state.selectedRfqId = latestOpenDealerRfq(view)?.rfqId;
   };
 
   const refreshPair = async (): Promise<void> => {
@@ -449,25 +507,17 @@ export const mountDealerWorkbench = async ({
     state.serverNow = status.currentTime;
     state.view = view;
     state.history = history;
-    syncSelectedInvitation(history);
+    syncSelection(view, history);
 
-    const currentInvitation = state.history.invitations.find(
-      (invitation) => invitation.invitationId === state.selectedInvitationId
-    );
+    const currentRfq = state.view.rfqs.find((rfq) => rfq.rfqId === state.selectedRfqId);
 
-    if (currentInvitation !== undefined) {
-      const currentOpenQuote = latestDealerOpenQuote(state.history, currentInvitation.rfqId);
+    if (currentRfq !== undefined) {
+      const currentOpenQuote = latestDealerOpenQuote(state.history, currentRfq.rfqId);
 
       if (currentOpenQuote !== undefined) {
         state.quantity = String(currentOpenQuote.quantity);
       } else {
-        const rfq = state.view.rfqs.find(
-          (candidate) => candidate.rfqId === currentInvitation.rfqId
-        );
-
-        if (rfq !== undefined) {
-          state.quantity = String(rfq.quantity);
-        }
+        state.quantity = String(currentRfq.quantity);
       }
     }
   };
@@ -514,22 +564,23 @@ export const mountDealerWorkbench = async ({
 
         void runWithFeedback(
           async () => {
-            if (state.history === undefined) {
-              throw new Error("Select an invitation before submitting or revising a quote.");
+            if (state.history === undefined || state.view === undefined) {
+              throw new Error("Select an RFQ before submitting or revising a quote.");
             }
 
-            const selectedInvitation = state.history.invitations.find(
-              (invitation) => invitation.invitationId === state.selectedInvitationId
-            );
+            const selectedRfqId =
+              state.selectedRfqId ??
+              latestDealerInvitation(state.history)?.rfqId ??
+              latestOpenDealerRfq(state.view)?.rfqId;
 
-            if (selectedInvitation === undefined) {
-              throw new Error("Select an invitation before submitting or revising a quote.");
+            if (selectedRfqId === undefined) {
+              throw new Error("Select an RFQ before submitting or revising a quote.");
             }
 
             const expiresAt = new Date(
               new Date(state.serverNow).getTime() + Number(state.ttlMinutes) * 60_000
             ).toISOString();
-            const currentOpenQuote = latestDealerOpenQuote(state.history, selectedInvitation.rfqId);
+            const currentOpenQuote = latestDealerOpenQuote(state.history, selectedRfqId);
 
             if (currentOpenQuote === undefined) {
               await client.submitQuote({
@@ -538,7 +589,7 @@ export const mountDealerWorkbench = async ({
                 pairId: state.pairId,
                 price: Number(state.price),
                 quantity: Number(state.quantity),
-                rfqId: selectedInvitation.rfqId
+                rfqId: selectedRfqId
               });
             } else {
               await client.reviseQuote({
@@ -572,7 +623,22 @@ export const mountDealerWorkbench = async ({
         if (action === "select-invitation") {
           const invitationId = String(id);
           state.selectedInvitationId = invitationId;
+          state.selectedRfqId =
+            state.history?.invitations.find(
+              (invitation) => invitation.invitationId === invitationId
+            )?.rfqId ?? state.selectedRfqId;
           setMessage(`Loaded invitation ${invitationId}.`, "accent");
+          render();
+          return;
+        }
+
+        if (action === "select-rfq") {
+          const rfqId = String(id);
+          state.selectedRfqId = rfqId;
+          state.selectedInvitationId =
+            state.history?.invitations.find((invitation) => invitation.rfqId === rfqId)
+              ?.invitationId ?? undefined;
+          setMessage(`Loaded RFQ ${rfqId}.`, "accent");
           render();
           return;
         }

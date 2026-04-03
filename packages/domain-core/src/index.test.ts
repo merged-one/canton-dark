@@ -3,39 +3,57 @@ import { describe, expect, it } from "vitest";
 import {
   DomainError,
   acceptDealerQuote,
+  acceptMatchProposal,
   assertInvariant,
   assertPairActive,
+  canDarkOrdersCross,
+  cancelDarkOrder,
   cancelRfqSession,
+  compareDarkOrderPriority,
   compareQuotePriority,
   createAccessGrant,
   createDealerInvitations,
   createDealerQuote,
+  createDarkOrder,
   createDomainError,
+  createMatchProposal,
   createPairInstance,
   createRfqSession,
+  executeDarkMatch,
   expireDealerInvitation,
   expireDealerQuote,
+  expireDarkOrder,
+  expireMatchProposal,
   getRoleEntitlements,
   hasEntitlement,
+  hasActiveOrderLock,
   isGrantActive,
+  isOrderLockActive,
   listPairDealerIds,
   markDealerInvitationResponded,
   markRfqQuoteExpired,
   markRfqQuoted,
   progressSettlementInstruction,
   rankComparableQuotes,
+  rejectMatchProposal,
   rejectAllQuotes,
   rejectRfqSession,
+  releaseOrderLock,
   resolveRfqInvitedDealerIds,
+  resolveDarkCrossPrice,
   resolveEntitlements,
   reviseDealerQuote,
   revokeAccessGrant,
   setPairPauseState,
+  synchronizeDarkCrossLifecycle,
   synchronizeRfqLifecycle,
   withdrawDealerQuote,
   type AccessGrant,
   type DealerInvitation,
   type DealerQuote,
+  type DarkOrder,
+  type MatchProposal,
+  type OrderLock,
   type PairInstance,
   type RFQSession,
   type SettlementInstruction
@@ -199,6 +217,93 @@ const buildAtsGrants = (pairId = "pair-ats-001"): readonly AccessGrant[] => [
     pairId,
     subjectId: "dealer-beta",
     role: "dealer",
+    grantedAt: createdAt,
+    grantedBy: "operator-1"
+  })
+];
+
+const buildDarkOrder = (overrides: Partial<DarkOrder> = {}): DarkOrder => ({
+  orderId: "dark-order-001",
+  clientOrderId: "client-order-001",
+  pairId: "pair-ats-001",
+  subscriberId: "subscriber-1",
+  instrumentId: "CUSIP-DARK-1",
+  side: "buy",
+  quantity: 50,
+  limitPrice: 101.5,
+  createdAt,
+  updatedAt: createdAt,
+  status: "open",
+  expiresAt: "2026-04-02T00:10:00.000Z",
+  ...overrides
+});
+
+const buildOrderLock = (overrides: Partial<OrderLock> = {}): OrderLock => ({
+  lockId: "lock-001",
+  pairId: "pair-ats-001",
+  orderId: "dark-order-001",
+  proposalId: "proposal-001",
+  subscriberId: "subscriber-1",
+  lockedAt: "2026-04-02T00:02:00.000Z",
+  lockedBy: "operator-1",
+  lockExpiresAt: "2026-04-02T00:03:00.000Z",
+  updatedAt: "2026-04-02T00:02:00.000Z",
+  status: "active",
+  ...overrides
+});
+
+const buildMatchProposal = (overrides: Partial<MatchProposal> = {}): MatchProposal => ({
+  proposalId: "proposal-001",
+  pairId: "pair-ats-001",
+  instrumentId: "CUSIP-DARK-1",
+  quantity: 50,
+  price: 101,
+  buyOrderId: "dark-order-001",
+  sellOrderId: "dark-order-002",
+  buySubscriberId: "subscriber-1",
+  sellSubscriberId: "subscriber-2",
+  buyLockId: "lock-001",
+  sellLockId: "lock-002",
+  buyResponse: "pending",
+  sellResponse: "pending",
+  createdAt: "2026-04-02T00:02:00.000Z",
+  createdBy: "operator-1",
+  expiresAt: "2026-04-02T00:03:00.000Z",
+  updatedAt: "2026-04-02T00:02:00.000Z",
+  status: "pending",
+  ...overrides
+});
+
+const buildDarkGrants = (pairId = "pair-ats-001"): readonly AccessGrant[] => [
+  createAccessGrant({
+    grantId: "dark-subscriber-1",
+    pairId,
+    subjectId: "subscriber-1",
+    role: "subscriber",
+    grantedAt: createdAt,
+    grantedBy: "operator-1"
+  }),
+  createAccessGrant({
+    grantId: "dark-subscriber-2",
+    pairId,
+    subjectId: "subscriber-2",
+    role: "subscriber",
+    grantedAt: createdAt,
+    grantedBy: "operator-1"
+  }),
+  createAccessGrant({
+    grantId: "dark-operator",
+    pairId,
+    subjectId: "operator-1",
+    role: "operator",
+    grantedAt: createdAt,
+    grantedBy: "operator-1"
+  }),
+  createAccessGrant({
+    grantId: "dark-settlement",
+    pairId,
+    subjectId: "settler-1",
+    role: "settlement_delegate",
     grantedAt: createdAt,
     grantedBy: "operator-1"
   })
@@ -2025,5 +2130,530 @@ describe("phase 1 domain-core rules", () => {
         }
       }).rfq
     ).not.toHaveProperty("rejectionReason");
+  });
+
+  it("runs the dark-cross lifecycle from order submission through accepted execution", () => {
+    const pair = buildAtsPair();
+    const grants = buildDarkGrants(pair.pairId);
+    const buyOrder = createDarkOrder({
+      orderId: "dark-buy-1",
+      clientOrderId: "client-buy-1",
+      pair,
+      accessGrants: grants,
+      subscriberId: "subscriber-1",
+      instrumentId: "CUSIP-DARK-1",
+      side: "buy",
+      quantity: 50,
+      limitPrice: 101.5,
+      createdAt: "2026-04-02T00:00:00.000Z",
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const sellOrder = createDarkOrder({
+      orderId: "dark-sell-1",
+      clientOrderId: "client-sell-1",
+      pair,
+      accessGrants: grants,
+      subscriberId: "subscriber-2",
+      instrumentId: "CUSIP-DARK-1",
+      side: "sell",
+      quantity: 50,
+      limitPrice: 100.5,
+      createdAt: "2026-04-02T00:00:30.000Z",
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const created = createMatchProposal({
+      pair,
+      accessGrants: grants,
+      buyOrder,
+      sellOrder,
+      proposalId: "proposal-dark-1",
+      buyLockId: "lock-buy-1",
+      sellLockId: "lock-sell-1",
+      createdAt: "2026-04-02T00:01:00.000Z",
+      createdBy: "operator-1",
+      expiresAt: "2026-04-02T00:02:00.000Z"
+    });
+    const buyAccepted = acceptMatchProposal({
+      proposal: created.proposal,
+      accessGrants: grants,
+      actorId: "subscriber-1",
+      acceptedAt: "2026-04-02T00:01:10.000Z"
+    });
+    const fullyAccepted = acceptMatchProposal({
+      proposal: buyAccepted,
+      accessGrants: grants,
+      actorId: "subscriber-2",
+      acceptedAt: "2026-04-02T00:01:20.000Z"
+    });
+    const executed = executeDarkMatch({
+      pair,
+      accessGrants: grants,
+      proposal: fullyAccepted,
+      buyOrder,
+      sellOrder,
+      buyLock: created.buyLock,
+      sellLock: created.sellLock,
+      executionId: "execution-dark-1",
+      instructionId: "settlement-dark-1",
+      executedAt: "2026-04-02T00:01:30.000Z",
+      releasedBy: "settler-1"
+    });
+
+    expect(
+      compareDarkOrderPriority("buy", buyOrder, buildDarkOrder({ orderId: "dark-buy-2" }))
+    ).toBe(-1);
+    expect(canDarkOrdersCross(buyOrder, sellOrder)).toBe(true);
+    expect(resolveDarkCrossPrice(buyOrder, sellOrder)).toBe(101);
+    expect(fullyAccepted.status).toBe("accepted");
+    expect(executed.proposal).toMatchObject({
+      proposalId: "proposal-dark-1",
+      status: "executed",
+      executionId: "execution-dark-1"
+    });
+    expect(executed.buyOrder).toMatchObject({
+      orderId: "dark-buy-1",
+      status: "executed",
+      executionId: "execution-dark-1"
+    });
+    expect(executed.sellOrder).toMatchObject({
+      orderId: "dark-sell-1",
+      status: "executed",
+      executionId: "execution-dark-1"
+    });
+    expect(isOrderLockActive(created.buyLock)).toBe(true);
+    expect(hasActiveOrderLock("dark-buy-1", [created.buyLock, created.sellLock])).toBe(true);
+    expect(executed.buyLock).toMatchObject({
+      lockId: "lock-buy-1",
+      status: "released",
+      releaseReason: "executed"
+    });
+    expect(executed.executionTicket).toEqual({
+      executionId: "execution-dark-1",
+      executionKind: "dark_cross",
+      pairId: "pair-ats-001",
+      matchProposalId: "proposal-dark-1",
+      instrumentId: "CUSIP-DARK-1",
+      quantity: 50,
+      price: 101,
+      acceptedAt: "2026-04-02T00:01:20.000Z",
+      buyOrderId: "dark-buy-1",
+      sellOrderId: "dark-sell-1",
+      buySubscriberId: "subscriber-1",
+      sellSubscriberId: "subscriber-2",
+      side: "buy"
+    });
+    expect(executed.settlementInstruction).toEqual({
+      instructionId: "settlement-dark-1",
+      pairId: "pair-ats-001",
+      executionId: "execution-dark-1",
+      status: "pending",
+      createdAt: "2026-04-02T00:01:30.000Z",
+      updatedAt: "2026-04-02T00:01:30.000Z",
+      settlementKind: "dark_cross",
+      matchProposalId: "proposal-dark-1",
+      buyOrderId: "dark-buy-1",
+      sellOrderId: "dark-sell-1",
+      subscriberId: "subscriber-1",
+      sellSubscriberId: "subscriber-2",
+      settlementAgentId: "settler-1"
+    });
+    expect(
+      createDarkOrder({
+        orderId: "dark-no-expiry",
+        clientOrderId: "client-no-expiry",
+        pair,
+        accessGrants: grants,
+        subscriberId: "subscriber-1",
+        instrumentId: "CUSIP-DARK-2",
+        side: "buy",
+        quantity: 25,
+        limitPrice: 100.25,
+        createdAt: "2026-04-02T00:02:00.000Z"
+      })
+    ).not.toHaveProperty("expiresAt");
+  });
+
+  it("blocks dark-order cancellation while locked and releases expired proposals deterministically", () => {
+    const pair = buildAtsPair();
+    const grants = buildDarkGrants(pair.pairId);
+    const order = buildDarkOrder();
+    const buyLock = buildOrderLock();
+    const sellLock = buildOrderLock({
+      lockId: "lock-002",
+      orderId: "dark-order-002",
+      subscriberId: "subscriber-2"
+    });
+    const proposal = buildMatchProposal();
+
+    expect(() =>
+      cancelDarkOrder({
+        pair,
+        order,
+        accessGrants: grants,
+        activeLocks: [buyLock],
+        cancelledAt: "2026-04-02T00:02:30.000Z",
+        cancelledBy: "subscriber-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "DARK_ORDER_LOCKED" }));
+
+    const synced = synchronizeDarkCrossLifecycle({
+      orders: [
+        order,
+        buildDarkOrder({
+          orderId: "dark-order-002",
+          clientOrderId: "client-order-002",
+          side: "sell",
+          subscriberId: "subscriber-2",
+          limitPrice: 100.5
+        })
+      ],
+      locks: [buyLock, sellLock],
+      proposals: [proposal],
+      observedAt: "2026-04-02T00:03:05.000Z"
+    });
+
+    expect(expireMatchProposal(proposal, "2026-04-02T00:03:05.000Z").status).toBe("expired");
+    expect(expireDarkOrder(order, "2026-04-02T00:11:00.000Z").status).toBe("expired");
+    expect(
+      releaseOrderLock({
+        lock: buyLock,
+        releasedAt: "2026-04-02T00:03:05.000Z",
+        releasedBy: "system",
+        reason: "expired"
+      }).status
+    ).toBe("expired");
+    expect(synced.proposals[0]?.status).toBe("expired");
+    expect(synced.locks.every((lock) => lock.status === "expired")).toBe(true);
+  });
+
+  it("keeps nonterminal dark proposals unchanged before expiry and releases locks by proposal outcome", () => {
+    const pendingProposal = buildMatchProposal({
+      proposalId: "proposal-pending",
+      expiresAt: "2026-04-02T00:05:00.000Z"
+    });
+    const rejectedProposal = buildMatchProposal({
+      proposalId: "proposal-rejected",
+      status: "rejected",
+      rejectedBy: "subscriber-1",
+      rejectedAt: "2026-04-02T00:02:10.000Z",
+      updatedAt: "2026-04-02T00:02:10.000Z"
+    });
+    const executedProposal = buildMatchProposal({
+      proposalId: "proposal-executed",
+      status: "executed",
+      executionId: "execution-dark-1",
+      updatedAt: "2026-04-02T00:02:20.000Z"
+    });
+    const releasedLock = buildOrderLock({
+      lockId: "lock-released",
+      status: "released",
+      releasedAt: "2026-04-02T00:02:10.000Z",
+      releasedBy: "subscriber-1",
+      releaseReason: "rejected",
+      updatedAt: "2026-04-02T00:02:10.000Z"
+    });
+    const pendingLock = buildOrderLock({
+      lockId: "lock-pending",
+      proposalId: "proposal-pending",
+      lockExpiresAt: "2026-04-02T00:05:00.000Z"
+    });
+    const rejectedLock = buildOrderLock({
+      lockId: "lock-rejected",
+      proposalId: "proposal-rejected"
+    });
+    const executedLock = buildOrderLock({
+      lockId: "lock-executed",
+      proposalId: "proposal-executed"
+    });
+
+    expect(expireMatchProposal(pendingProposal, "2026-04-02T00:04:59.000Z")).toBe(pendingProposal);
+
+    const synced = synchronizeDarkCrossLifecycle({
+      orders: [],
+      proposals: [pendingProposal, rejectedProposal, executedProposal],
+      locks: [releasedLock, pendingLock, rejectedLock, executedLock],
+      observedAt: "2026-04-02T00:04:59.000Z"
+    });
+
+    expect(synced.locks[0]).toBe(releasedLock);
+    expect(synced.locks[1]).toBe(pendingLock);
+    expect(synced.locks[2]).toMatchObject({
+      lockId: "lock-rejected",
+      status: "released",
+      releaseReason: "rejected"
+    });
+    expect(synced.locks[3]).toMatchObject({
+      lockId: "lock-executed",
+      status: "released",
+      releaseReason: "executed"
+    });
+  });
+
+  it("covers seller rejection and malformed proposal lifecycle branches deterministically", () => {
+    const sellerRejected = rejectMatchProposal({
+      proposal: buildMatchProposal(),
+      accessGrants: buildDarkGrants(),
+      actorId: "subscriber-2",
+      rejectedAt: "2026-04-02T00:02:30.000Z"
+    });
+
+    expect(sellerRejected.buyResponse).toBe("pending");
+    expect(sellerRejected.sellResponse).toBe("rejected");
+    expect(sellerRejected).not.toHaveProperty("rejectionReason");
+
+    const malformedRejected: MatchProposal = buildMatchProposal({
+      proposalId: "proposal-rejected-system",
+      status: "rejected",
+      rejectedAt: "2026-04-02T00:02:35.000Z",
+      updatedAt: "2026-04-02T00:02:35.000Z"
+    });
+    delete malformedRejected.rejectedBy;
+    const malformedExecuted: MatchProposal = buildMatchProposal({
+      proposalId: "proposal-executed-missing-id",
+      status: "executed",
+      updatedAt: "2026-04-02T00:02:40.000Z"
+    });
+    delete malformedExecuted.executionId;
+    const rejectedLock = buildOrderLock({
+      lockId: "lock-rejected-system",
+      proposalId: "proposal-rejected-system"
+    });
+    const executedLock = buildOrderLock({
+      lockId: "lock-executed-missing-id",
+      proposalId: "proposal-executed-missing-id"
+    });
+
+    const synced = synchronizeDarkCrossLifecycle({
+      orders: [],
+      proposals: [malformedRejected, malformedExecuted],
+      locks: [rejectedLock, executedLock],
+      observedAt: "2026-04-02T00:02:45.000Z"
+    });
+
+    expect(synchronizeDarkCrossLifecycle({ observedAt: "2026-04-02T00:02:45.000Z" }).locks).toEqual(
+      []
+    );
+    expect(synced.locks[0]).toMatchObject({
+      lockId: "lock-rejected-system",
+      status: "released",
+      releasedBy: "system",
+      releaseReason: "rejected"
+    });
+    expect(synced.locks[1]).toBe(executedLock);
+  });
+
+  it("orders dark-order priority deterministically and keeps duplicate accept/release operations idempotent", () => {
+    const higherPricedBuy = buildDarkOrder({ orderId: "buy-high", limitPrice: 102 });
+    const lowerPricedBuy = buildDarkOrder({ orderId: "buy-low", limitPrice: 101 });
+    const largerSell = buildDarkOrder({
+      orderId: "sell-large",
+      side: "sell",
+      subscriberId: "subscriber-2",
+      limitPrice: 100,
+      quantity: 60
+    });
+    const smallerSell = buildDarkOrder({
+      orderId: "sell-small",
+      side: "sell",
+      subscriberId: "subscriber-2",
+      limitPrice: 100,
+      quantity: 50
+    });
+    const laterBuy = buildDarkOrder({
+      orderId: "buy-later",
+      createdAt: "2026-04-02T00:00:01.000Z",
+      updatedAt: "2026-04-02T00:00:01.000Z"
+    });
+    const acceptedProposal = acceptMatchProposal({
+      proposal: buildMatchProposal({
+        buyResponse: "accepted",
+        buyAcceptedAt: "2026-04-02T00:02:05.000Z"
+      }),
+      accessGrants: buildDarkGrants(),
+      actorId: "subscriber-1",
+      acceptedAt: "2026-04-02T00:02:10.000Z"
+    });
+    const releasedLock = buildOrderLock({
+      status: "released",
+      releasedAt: "2026-04-02T00:02:10.000Z",
+      releasedBy: "system",
+      releaseReason: "expired",
+      updatedAt: "2026-04-02T00:02:10.000Z"
+    });
+
+    expect(compareDarkOrderPriority("buy", higherPricedBuy, lowerPricedBuy)).toBeLessThan(0);
+    expect(compareDarkOrderPriority("sell", largerSell, smallerSell)).toBeLessThan(0);
+    expect(
+      compareDarkOrderPriority("sell", largerSell, buildDarkOrder({ side: "sell", limitPrice: 99 }))
+    ).toBeGreaterThan(0);
+    expect(compareDarkOrderPriority("buy", buildDarkOrder(), laterBuy)).toBeLessThan(0);
+    expect(
+      acceptMatchProposal({
+        proposal: acceptedProposal,
+        accessGrants: buildDarkGrants(),
+        actorId: "subscriber-1",
+        acceptedAt: "2026-04-02T00:02:20.000Z"
+      })
+    ).toBe(acceptedProposal);
+    expect(
+      releaseOrderLock({
+        lock: releasedLock,
+        releasedAt: "2026-04-02T00:02:20.000Z",
+        releasedBy: "system",
+        reason: "expired"
+      })
+    ).toBe(releasedLock);
+    expect(
+      expireDarkOrder(buildDarkOrder({ status: "cancelled" }), "2026-04-02T00:20:00.000Z")
+    ).toEqual(buildDarkOrder({ status: "cancelled" }));
+    const openWithoutExpiry: DarkOrder = buildDarkOrder();
+    delete openWithoutExpiry.expiresAt;
+    expect(expireDarkOrder(openWithoutExpiry, "2026-04-02T00:20:00.000Z")).toEqual(
+      openWithoutExpiry
+    );
+    expect(
+      cancelDarkOrder({
+        pair: buildAtsPair(),
+        order: buildDarkOrder({
+          status: "cancelled",
+          cancelledAt: "2026-04-02T00:02:10.000Z",
+          cancelledBy: "subscriber-1",
+          updatedAt: "2026-04-02T00:02:10.000Z"
+        }),
+        accessGrants: buildDarkGrants(),
+        cancelledAt: "2026-04-02T00:03:00.000Z",
+        cancelledBy: "subscriber-1"
+      }).status
+    ).toBe("cancelled");
+    expect(
+      cancelDarkOrder({
+        pair: buildAtsPair(),
+        order: buildDarkOrder({
+          orderId: "dark-order-open-no-locks",
+          clientOrderId: "client-order-open-no-locks"
+        }),
+        accessGrants: buildDarkGrants(),
+        cancelledAt: "2026-04-02T00:03:10.000Z",
+        cancelledBy: "subscriber-1"
+      }).status
+    ).toBe("cancelled");
+    expect(() =>
+      cancelDarkOrder({
+        pair: buildAtsPair(),
+        order: buildDarkOrder({ status: "executed", executedAt: "2026-04-02T00:03:00.000Z" }),
+        accessGrants: buildDarkGrants(),
+        cancelledAt: "2026-04-02T00:04:00.000Z",
+        cancelledBy: "subscriber-1"
+      })
+    ).toThrow(expect.objectContaining({ code: "DARK_ORDER_ALREADY_TERMINAL" }));
+  });
+
+  it("rejects invalid dark-cross combinations and keeps rejection idempotent", () => {
+    const pair = buildAtsPair();
+    const grants = buildDarkGrants(pair.pairId);
+    const buyOrder = buildDarkOrder();
+    const selfSellOrder = buildDarkOrder({
+      orderId: "dark-order-self",
+      clientOrderId: "client-order-self",
+      side: "sell",
+      subscriberId: "subscriber-1",
+      limitPrice: 100
+    });
+
+    expect(canDarkOrdersCross(buyOrder, selfSellOrder)).toBe(false);
+    expect(() =>
+      createMatchProposal({
+        pair,
+        accessGrants: grants,
+        buyOrder,
+        sellOrder: selfSellOrder,
+        proposalId: "proposal-self",
+        buyLockId: "lock-self-buy",
+        sellLockId: "lock-self-sell",
+        createdAt: "2026-04-02T00:01:00.000Z",
+        createdBy: "operator-1",
+        expiresAt: "2026-04-02T00:02:00.000Z"
+      })
+    ).toThrow(expect.objectContaining({ code: "NO_MATCH_CANDIDATE" }));
+
+    const rejected = rejectMatchProposal({
+      proposal: buildMatchProposal(),
+      accessGrants: grants,
+      actorId: "subscriber-1",
+      rejectedAt: "2026-04-02T00:02:10.000Z",
+      reason: "manual no"
+    });
+
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      rejectedBy: "subscriber-1",
+      rejectionReason: "manual no",
+      buyResponse: "rejected"
+    });
+    expect(
+      rejectMatchProposal({
+        proposal: rejected,
+        accessGrants: grants,
+        actorId: "subscriber-1",
+        rejectedAt: "2026-04-02T00:02:20.000Z"
+      })
+    ).toBe(rejected);
+    expect(
+      acceptMatchProposal({
+        proposal: buildMatchProposal(),
+        accessGrants: grants,
+        actorId: "subscriber-2",
+        acceptedAt: "2026-04-02T00:02:15.000Z"
+      })
+    ).toMatchObject({
+      buyResponse: "pending",
+      sellResponse: "accepted"
+    });
+    expect(() =>
+      acceptMatchProposal({
+        proposal: rejected,
+        accessGrants: grants,
+        actorId: "subscriber-2",
+        acceptedAt: "2026-04-02T00:02:30.000Z"
+      })
+    ).toThrow(expect.objectContaining({ code: "MATCH_PROPOSAL_NOT_PENDING" }));
+  });
+
+  it("falls back to executedAt when accepted dark proposals do not record acceptedAt", () => {
+    const pair = buildAtsPair();
+    const grants = buildDarkGrants(pair.pairId);
+    const proposal: MatchProposal = buildMatchProposal({
+      status: "accepted",
+      buyResponse: "accepted",
+      sellResponse: "accepted"
+    });
+    delete proposal.acceptedAt;
+
+    const executed = executeDarkMatch({
+      pair,
+      accessGrants: grants,
+      proposal,
+      buyOrder: buildDarkOrder(),
+      sellOrder: buildDarkOrder({
+        orderId: "dark-order-002",
+        clientOrderId: "client-order-002",
+        side: "sell",
+        subscriberId: "subscriber-2",
+        limitPrice: 100.5
+      }),
+      buyLock: buildOrderLock(),
+      sellLock: buildOrderLock({
+        lockId: "lock-002",
+        orderId: "dark-order-002",
+        proposalId: proposal.proposalId,
+        subscriberId: "subscriber-2"
+      }),
+      executionId: "execution-dark-fallback",
+      instructionId: "settlement-dark-fallback",
+      executedAt: "2026-04-02T00:03:30.000Z",
+      releasedBy: "settler-1"
+    });
+
+    expect(executed.executionTicket.acceptedAt).toBe("2026-04-02T00:03:30.000Z");
   });
 });

@@ -236,8 +236,8 @@ const renderExecutionTable = (view: OperatorOversightView): string =>
       id: execution.executionId,
       cells: {
         executionId: renderCode(execution.executionId),
-        quoteId: renderCode(execution.quoteId),
-        subscriberId: renderCode(execution.subscriberId),
+        quoteId: renderCode(execution.quoteId ?? "n/a"),
+        subscriberId: renderCode(execution.subscriberId ?? "n/a"),
         price: escapeHtml(execution.price.toFixed(2)),
         quantity: escapeHtml(String(execution.quantity))
       }

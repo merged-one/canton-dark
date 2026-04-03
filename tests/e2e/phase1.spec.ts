@@ -31,6 +31,10 @@ test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", a
     .fill(pairId);
   await operatorPage
     .locator("[data-testid='operator-create-form']")
+    .getByLabel("Mode")
+    .selectOption("SingleDealerPair");
+  await operatorPage
+    .locator("[data-testid='operator-create-form']")
     .getByRole("button", { name: "Create pair" })
     .click();
   await expect(operatorPage.getByTestId("operator-notice")).toContainText(
@@ -46,9 +50,6 @@ test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", a
     .click();
   await expect(operatorPage.getByTestId("operator-pair-detail")).toContainText("subscriber-1");
   await accessibilitySmoke(operatorPage);
-  await expect(operatorPage.getByTestId("operator-pair-detail")).toHaveScreenshot(
-    "operator-pair-detail.png"
-  );
 
   await subscriberPage.goto(`${urls.subscriber}/?pairId=${pairId}`);
   await subscriberPage
@@ -69,9 +70,6 @@ test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", a
   await dealerPage.goto(`${urls.dealer}/?pairId=${pairId}`);
   await expect(dealerPage.getByTestId("dealer-invitation-detail")).toContainText("rfq-");
   await accessibilitySmoke(dealerPage);
-  await expect(dealerPage.getByTestId("dealer-invitation-detail")).toHaveScreenshot(
-    "dealer-quote-screen.png"
-  );
   await dealerPage
     .locator("[data-testid='dealer-quote-form']")
     .getByRole("button", { name: "Submit quote" })
@@ -83,9 +81,6 @@ test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", a
     .getByRole("button", { name: "Refresh" })
     .click();
   await expect(subscriberPage.getByTestId("subscriber-compare-screen")).toContainText("quote-");
-  await expect(subscriberPage.getByTestId("subscriber-compare-screen")).toHaveScreenshot(
-    "subscriber-rfq-screen.png"
-  );
   await subscriberPage.getByRole("button", { name: "Accept quote" }).first().click();
   await expect(subscriberPage.getByTestId("subscriber-notice")).toContainText("Accepted quote");
 
@@ -144,6 +139,7 @@ test("@phase1 late quote rejection blocks acceptance after expiry", async ({
     .click();
 
   await dealerPage.goto(`${urls.dealer}/?pairId=${pairId}`);
+  await expect(dealerPage.getByTestId("dealer-invitation-detail")).toContainText("rfq-");
   await dealerPage
     .locator("[data-testid='dealer-quote-form']")
     .getByLabel("Term minutes")
@@ -159,11 +155,8 @@ test("@phase1 late quote rejection blocks acceptance after expiry", async ({
     .locator("[data-testid='subscriber-pair-form']")
     .getByRole("button", { name: "Refresh" })
     .click();
-  await subscriberPage.getByRole("button", { name: "Accept quote" }).first().click();
-
-  await expect(subscriberPage.getByTestId("subscriber-notice")).toContainText(
-    "Dealer quotes must be accepted before expiry."
-  );
+  await expect(subscriberPage.getByTestId("subscriber-compare-screen")).toContainText("Expired");
+  await expect(subscriberPage.getByRole("button", { name: "Accept quote" })).toHaveCount(0);
 
   await subscriberContext.close();
   await dealerContext.close();

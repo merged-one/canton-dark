@@ -1,29 +1,45 @@
 import {
   acceptDealerQuote,
+  acceptMatchProposal,
+  canDarkOrdersCross,
+  cancelDarkOrder,
   cancelRfqSession,
+  compareDarkOrderPriority,
   createAccessGrant,
   createDealerInvitations,
   createDealerQuote,
+  createDarkOrder,
   createDomainError,
+  createMatchProposal,
   createPairInstance,
   createRfqSession,
+  executeDarkMatch,
   hasEntitlement,
+  hasActiveOrderLock,
+  isOrderLockActive,
   markDealerInvitationResponded,
   markRfqQuoted,
   progressSettlementInstruction,
+  rejectMatchProposal,
   rejectAllQuotes,
   rejectRfqSession,
+  releaseOrderLock,
   reviseDealerQuote,
   setPairPauseState,
+  synchronizeDarkCrossLifecycle,
   synchronizeRfqLifecycle,
   withdrawDealerQuote,
   type AccessGrant,
   type AuditRecord,
   type DealerInvitation,
   type DealerQuote,
+  type DarkOrder,
+  type ExecuteDarkMatchResult,
   type ExecutionTicket,
   type InviteRevisionPolicy,
+  type MatchProposal,
   type OperatorOversightRole,
+  type OrderLock,
   type PairInstance,
   type PairMode,
   type QuoteRevision,
@@ -60,14 +76,20 @@ export type IdGenerator = {
 };
 
 export type LedgerPort = {
+  getDarkOrder: (orderId: string) => Promise<DarkOrder | null>;
   getExecutionTicket: (executionId: string) => Promise<ExecutionTicket | null>;
+  getMatchProposal: (proposalId: string) => Promise<MatchProposal | null>;
   getPair: (pairId: string) => Promise<PairInstance | null>;
+  getOrderLock: (lockId: string) => Promise<OrderLock | null>;
   getQuote: (quoteId: string) => Promise<DealerQuote | null>;
   getRfq: (rfqId: string) => Promise<RFQSession | null>;
   getSettlementInstruction: (instructionId: string) => Promise<SettlementInstruction | null>;
   listAccessGrants: (pairId: string) => Promise<readonly AccessGrant[]>;
+  listDarkOrders: (pairId: string) => Promise<readonly DarkOrder[]>;
   listExecutionTickets: (pairId: string) => Promise<readonly ExecutionTicket[]>;
   listInvitations: (pairId: string) => Promise<readonly DealerInvitation[]>;
+  listMatchProposals: (pairId: string) => Promise<readonly MatchProposal[]>;
+  listOrderLocks: (pairId: string) => Promise<readonly OrderLock[]>;
   listPairs: () => Promise<readonly PairInstance[]>;
   listQuoteRevisions: (pairId: string) => Promise<readonly QuoteRevision[]>;
   listQuoteWithdrawals: (pairId: string) => Promise<readonly QuoteWithdrawal[]>;
@@ -75,8 +97,11 @@ export type LedgerPort = {
   listRfqs: (pairId: string) => Promise<readonly RFQSession[]>;
   listSettlementInstructions: (pairId: string) => Promise<readonly SettlementInstruction[]>;
   saveAccessGrant: (grant: AccessGrant) => Promise<void>;
+  saveDarkOrder: (order: DarkOrder) => Promise<void>;
   saveExecutionTicket: (execution: ExecutionTicket) => Promise<void>;
   saveInvitation: (invitation: DealerInvitation) => Promise<void>;
+  saveMatchProposal: (proposal: MatchProposal) => Promise<void>;
+  saveOrderLock: (lock: OrderLock) => Promise<void>;
   savePair: (pair: PairInstance) => Promise<void>;
   saveQuote: (quote: DealerQuote) => Promise<void>;
   saveQuoteRevision: (revision: QuoteRevision) => Promise<void>;
@@ -207,6 +232,65 @@ export type MarkSettlementProgressionCommand = {
   status: SettlementStatus;
 };
 
+export type SubmitDarkOrderCommand = {
+  actorId: string;
+  clientOrderId: string;
+  expiresAt?: string;
+  instrumentId: string;
+  limitPrice: number;
+  pairId: string;
+  quantity: number;
+  side: RFQSession["side"];
+};
+
+export type CancelDarkOrderCommand = {
+  actorId: string;
+  orderId: string;
+  pairId: string;
+};
+
+export type GenerateMatchProposalCommand = {
+  actorId: string;
+  buyOrderId?: string;
+  expiresAt?: string;
+  pairId: string;
+  sellOrderId?: string;
+};
+
+export type AcceptMatchCommand = {
+  actorId: string;
+  pairId: string;
+  proposalId: string;
+};
+
+export type RejectMatchCommand = {
+  actorId: string;
+  pairId: string;
+  proposalId: string;
+  reason?: string;
+};
+
+export type ReleaseExpiredLockCommand = {
+  actorId: string;
+  pairId: string;
+  proposalId: string;
+};
+
+export type ExecuteSettlementCommand = {
+  actorId: string;
+  pairId: string;
+  proposalId: string;
+};
+
+export type DarkSubscriberState = {
+  executions: readonly ExecutionTicket[];
+  locks: readonly OrderLock[];
+  orders: readonly DarkOrder[];
+  proposals: readonly MatchProposal[];
+  settlements: readonly SettlementInstruction[];
+  subscriberId: string;
+};
+
 const requirePair = async (ledger: LedgerPort, pairId: string): Promise<PairInstance> => {
   const pair = await ledger.getPair(pairId);
 
@@ -235,6 +319,39 @@ const requireQuoteFrom = (quotes: readonly DealerQuote[], quoteId: string): Deal
   }
 
   return quote;
+};
+
+const requireDarkOrderFrom = (orders: readonly DarkOrder[], orderId: string): DarkOrder => {
+  const order = orders.find((candidate) => candidate.orderId === orderId);
+
+  if (order === undefined) {
+    throw new Error(`Dark order ${orderId} was not found.`);
+  }
+
+  return order;
+};
+
+const requireMatchProposalFrom = (
+  proposals: readonly MatchProposal[],
+  proposalId: string
+): MatchProposal => {
+  const proposal = proposals.find((candidate) => candidate.proposalId === proposalId);
+
+  if (proposal === undefined) {
+    throw new Error(`Match proposal ${proposalId} was not found.`);
+  }
+
+  return proposal;
+};
+
+const requireOrderLockFrom = (locks: readonly OrderLock[], lockId: string): OrderLock => {
+  const lock = locks.find((candidate) => candidate.lockId === lockId);
+
+  if (lock === undefined) {
+    throw new Error(`Order lock ${lockId} was not found.`);
+  }
+
+  return lock;
 };
 
 const requireSettlementInstruction = async (
@@ -402,6 +519,44 @@ const matchRfqQuote =
   (quote: DealerQuote): boolean =>
     quote.rfqId === rfq.rfqId && quote.pairId === rfq.pairId;
 
+const delayProposalExpiry = (nowIso: string, milliseconds = 30_000): string =>
+  new Date(Date.parse(nowIso) + milliseconds).toISOString();
+
+const matchProposalByOrders =
+  (buyOrderId: string, sellOrderId: string) =>
+  (proposal: MatchProposal): boolean =>
+    proposal.buyOrderId === buyOrderId &&
+    proposal.sellOrderId === sellOrderId &&
+    (proposal.status === "pending" || proposal.status === "accepted");
+
+const selectDarkCrossCandidate = (
+  orders: readonly DarkOrder[],
+  locks: readonly OrderLock[]
+): { buyOrder: DarkOrder; sellOrder: DarkOrder } | null => {
+  const unlockedOrders = orders.filter(
+    (order) => order.status === "open" && !hasActiveOrderLock(order.orderId, locks)
+  );
+  const buys = [...unlockedOrders]
+    .filter((order) => order.side === "buy")
+    .sort((left, right) => compareDarkOrderPriority("buy", left, right));
+  const sells = [...unlockedOrders]
+    .filter((order) => order.side === "sell")
+    .sort((left, right) => compareDarkOrderPriority("sell", left, right));
+
+  for (const buyOrder of buys) {
+    const sellOrder = sells.find((candidate) => canDarkOrdersCross(buyOrder, candidate));
+
+    if (sellOrder !== undefined) {
+      return {
+        buyOrder,
+        sellOrder
+      };
+    }
+  }
+
+  return null;
+};
+
 const recordAudit = async (
   dependencies: VenueApplicationDependencies,
   entry: AuditRecord
@@ -445,6 +600,52 @@ const persistSynchronizedRfq = async (
 
     if (previous === undefined || hasChanged(previous, quote)) {
       await dependencies.ledger.saveQuote(quote);
+    }
+  }
+};
+
+const persistSynchronizedDarkCross = async (
+  dependencies: VenueApplicationDependencies,
+  prior: {
+    locks: readonly OrderLock[];
+    orders: readonly DarkOrder[];
+    proposals: readonly MatchProposal[];
+  },
+  next: {
+    locks: readonly OrderLock[];
+    orders: readonly DarkOrder[];
+    proposals: readonly MatchProposal[];
+  }
+): Promise<void> => {
+  const priorOrderMap = new Map(prior.orders.map((order) => [order.orderId, order]));
+
+  for (const order of next.orders) {
+    const previous = priorOrderMap.get(order.orderId);
+
+    if (previous === undefined || hasChanged(previous, order)) {
+      await dependencies.ledger.saveDarkOrder(order);
+    }
+  }
+
+  const priorLockMap = new Map(prior.locks.map((lock) => [lock.lockId, lock]));
+
+  for (const lock of next.locks) {
+    const previous = priorLockMap.get(lock.lockId);
+
+    if (previous === undefined || hasChanged(previous, lock)) {
+      await dependencies.ledger.saveOrderLock(lock);
+    }
+  }
+
+  const priorProposalMap = new Map(
+    prior.proposals.map((proposal) => [proposal.proposalId, proposal])
+  );
+
+  for (const proposal of next.proposals) {
+    const previous = priorProposalMap.get(proposal.proposalId);
+
+    if (previous === undefined || hasChanged(previous, proposal)) {
+      await dependencies.ledger.saveMatchProposal(proposal);
     }
   }
 };
@@ -502,19 +703,61 @@ const synchronizePairLifecycle = async (
   }
 };
 
+const synchronizeDarkCrossPairLifecycle = async (
+  dependencies: VenueApplicationDependencies,
+  pair: PairInstance
+): Promise<void> => {
+  const now = dependencies.clock.now().toISOString();
+  const [orders, locks, proposals] = await Promise.all([
+    dependencies.ledger.listDarkOrders(pair.pairId),
+    dependencies.ledger.listOrderLocks(pair.pairId),
+    dependencies.ledger.listMatchProposals(pair.pairId)
+  ]);
+  const synced = synchronizeDarkCrossLifecycle({
+    orders,
+    locks,
+    proposals,
+    observedAt: now
+  });
+
+  await persistSynchronizedDarkCross(
+    dependencies,
+    {
+      orders,
+      locks,
+      proposals
+    },
+    synced
+  );
+};
+
 const loadRawPairSnapshot = async (dependencies: VenueApplicationDependencies, pairId: string) => {
   const pair = await requirePair(dependencies.ledger, pairId);
-  const [grants, rfqs, quotes, executions, settlements, invitations, revisions, withdrawals] =
-    await Promise.all([
-      dependencies.ledger.listAccessGrants(pairId),
-      dependencies.ledger.listRfqs(pairId),
-      dependencies.ledger.listQuotes(pairId),
-      dependencies.ledger.listExecutionTickets(pairId),
-      dependencies.ledger.listSettlementInstructions(pairId),
-      dependencies.ledger.listInvitations(pairId),
-      dependencies.ledger.listQuoteRevisions(pairId),
-      dependencies.ledger.listQuoteWithdrawals(pairId)
-    ]);
+  const [
+    grants,
+    rfqs,
+    quotes,
+    executions,
+    settlements,
+    invitations,
+    revisions,
+    withdrawals,
+    darkOrders,
+    orderLocks,
+    matchProposals
+  ] = await Promise.all([
+    dependencies.ledger.listAccessGrants(pairId),
+    dependencies.ledger.listRfqs(pairId),
+    dependencies.ledger.listQuotes(pairId),
+    dependencies.ledger.listExecutionTickets(pairId),
+    dependencies.ledger.listSettlementInstructions(pairId),
+    dependencies.ledger.listInvitations(pairId),
+    dependencies.ledger.listQuoteRevisions(pairId),
+    dependencies.ledger.listQuoteWithdrawals(pairId),
+    dependencies.ledger.listDarkOrders(pairId),
+    dependencies.ledger.listOrderLocks(pairId),
+    dependencies.ledger.listMatchProposals(pairId)
+  ]);
 
   return {
     pair,
@@ -525,7 +768,10 @@ const loadRawPairSnapshot = async (dependencies: VenueApplicationDependencies, p
     settlements,
     invitations,
     revisions,
-    withdrawals
+    withdrawals,
+    darkOrders,
+    orderLocks,
+    matchProposals
   };
 };
 
@@ -533,12 +779,36 @@ const loadLivePairSnapshot = async (dependencies: VenueApplicationDependencies, 
   const pair = await requirePair(dependencies.ledger, pairId);
 
   await synchronizePairLifecycle(dependencies, pair);
+  await synchronizeDarkCrossPairLifecycle(dependencies, pair);
 
   return loadRawPairSnapshot(dependencies, pairId);
 };
 
 export const createVenueApplication = (dependencies: VenueApplicationDependencies) => {
   const nowIso = (): string => dependencies.clock.now().toISOString();
+  const darkCrossQueues = new Map<string, Promise<void>>();
+
+  const serializeDarkCrossPair = async <T>(pairId: string, work: () => Promise<T>): Promise<T> => {
+    const prior = darkCrossQueues.get(pairId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const settledPrior = Promise.allSettled([prior]);
+
+    darkCrossQueues.set(
+      pairId,
+      settledPrior.then(() => current)
+    );
+
+    await settledPrior;
+
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  };
 
   const createPair = async (command: CreatePairCommand): Promise<PairInstance> => {
     const now = nowIso();
@@ -1261,6 +1531,383 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
     return nextInstruction;
   };
 
+  const submitDarkOrder = async (command: SubmitDarkOrderCommand): Promise<DarkOrder> =>
+    serializeDarkCrossPair(command.pairId, async () => {
+      const snapshot = await loadLivePairSnapshot(dependencies, command.pairId);
+      const now = nowIso();
+      const existing = snapshot.darkOrders.find(
+        (order) =>
+          order.subscriberId === command.actorId && order.clientOrderId === command.clientOrderId
+      );
+
+      if (existing !== undefined) {
+        return existing;
+      }
+
+      const order = createDarkOrder({
+        orderId: dependencies.idGenerator.nextId("dark-order"),
+        pair: snapshot.pair,
+        accessGrants: snapshot.grants,
+        subscriberId: command.actorId,
+        clientOrderId: command.clientOrderId,
+        instrumentId: command.instrumentId,
+        side: command.side,
+        quantity: command.quantity,
+        limitPrice: command.limitPrice,
+        createdAt: now,
+        ...(command.expiresAt !== undefined ? { expiresAt: command.expiresAt } : {})
+      });
+
+      await dependencies.ledger.saveDarkOrder(order);
+      await recordAudit(dependencies, {
+        action: "submit_dark_order",
+        actorId: command.actorId,
+        at: now,
+        detail: `Dark order ${order.orderId} submitted for ${order.quantity} units.`,
+        entityId: order.orderId,
+        pairId: snapshot.pair.pairId
+      });
+
+      return order;
+    });
+
+  const cancelDarkOrderCommand = async (command: CancelDarkOrderCommand): Promise<DarkOrder> =>
+    serializeDarkCrossPair(command.pairId, async () => {
+      const snapshot = await loadLivePairSnapshot(dependencies, command.pairId);
+      const now = nowIso();
+      const order = requireDarkOrderFrom(snapshot.darkOrders, command.orderId);
+      const cancelled = cancelDarkOrder({
+        pair: snapshot.pair,
+        order,
+        accessGrants: snapshot.grants,
+        activeLocks: snapshot.orderLocks,
+        cancelledAt: now,
+        cancelledBy: command.actorId
+      });
+
+      await dependencies.ledger.saveDarkOrder(cancelled);
+      await recordAudit(dependencies, {
+        action: "cancel_dark_order",
+        actorId: command.actorId,
+        at: now,
+        detail: `Dark order ${cancelled.orderId} cancelled.`,
+        entityId: cancelled.orderId,
+        pairId: snapshot.pair.pairId
+      });
+
+      return cancelled;
+    });
+
+  const generateMatchProposal = async (
+    command: GenerateMatchProposalCommand
+  ): Promise<{ buyLock: OrderLock; proposal: MatchProposal; sellLock: OrderLock }> =>
+    serializeDarkCrossPair(command.pairId, async () => {
+      const snapshot = await loadLivePairSnapshot(dependencies, command.pairId);
+      const now = nowIso();
+
+      ensureActorCanViewOperatorScope(snapshot.pair, command.actorId);
+
+      const selected =
+        command.buyOrderId !== undefined || command.sellOrderId !== undefined
+          ? (() => {
+              if (command.buyOrderId === undefined || command.sellOrderId === undefined) {
+                throw createDomainError(
+                  "NO_MATCH_CANDIDATE",
+                  "Targeted match proposals require both a buy order id and a sell order id.",
+                  {
+                    buyOrderId: command.buyOrderId,
+                    sellOrderId: command.sellOrderId
+                  }
+                );
+              }
+
+              return {
+                buyOrder: requireDarkOrderFrom(snapshot.darkOrders, command.buyOrderId),
+                sellOrder: requireDarkOrderFrom(snapshot.darkOrders, command.sellOrderId)
+              };
+            })()
+          : selectDarkCrossCandidate(snapshot.darkOrders, snapshot.orderLocks);
+
+      if (selected === null) {
+        throw createDomainError(
+          "NO_MATCH_CANDIDATE",
+          "No compatible dark-cross candidate is currently available for the pair.",
+          {
+            pairId: snapshot.pair.pairId
+          }
+        );
+      }
+
+      const existingProposal = snapshot.matchProposals.find(
+        matchProposalByOrders(selected.buyOrder.orderId, selected.sellOrder.orderId)
+      );
+
+      if (existingProposal !== undefined) {
+        return {
+          proposal: existingProposal,
+          buyLock: requireOrderLockFrom(snapshot.orderLocks, existingProposal.buyLockId),
+          sellLock: requireOrderLockFrom(snapshot.orderLocks, existingProposal.sellLockId)
+        };
+      }
+
+      const activeLocks = snapshot.orderLocks.filter(
+        (lock) =>
+          isOrderLockActive(lock) &&
+          (lock.orderId === selected.buyOrder.orderId ||
+            lock.orderId === selected.sellOrder.orderId)
+      );
+
+      if (activeLocks.length > 0) {
+        throw createDomainError(
+          "ORDER_LOCK_ACTIVE",
+          "One or more candidate orders are already locked by another proposal.",
+          {
+            lockIds: activeLocks.map((lock) => lock.lockId),
+            pairId: snapshot.pair.pairId
+          }
+        );
+      }
+
+      const created = createMatchProposal({
+        pair: snapshot.pair,
+        accessGrants: snapshot.grants,
+        createdAt: now,
+        createdBy: command.actorId,
+        proposalId: dependencies.idGenerator.nextId("match-proposal"),
+        buyLockId: dependencies.idGenerator.nextId("order-lock"),
+        sellLockId: dependencies.idGenerator.nextId("order-lock"),
+        buyOrder: selected.buyOrder,
+        sellOrder: selected.sellOrder,
+        expiresAt: command.expiresAt ?? delayProposalExpiry(now)
+      });
+
+      await dependencies.ledger.saveOrderLock(created.buyLock);
+      await dependencies.ledger.saveOrderLock(created.sellLock);
+      await dependencies.ledger.saveMatchProposal(created.proposal);
+      await recordAudit(dependencies, {
+        action: "generate_match_proposal",
+        actorId: command.actorId,
+        at: now,
+        detail: `Match proposal ${created.proposal.proposalId} locked orders ${created.proposal.buyOrderId} and ${created.proposal.sellOrderId}.`,
+        entityId: created.proposal.proposalId,
+        pairId: snapshot.pair.pairId
+      });
+
+      return created;
+    });
+
+  const acceptMatch = async (command: AcceptMatchCommand): Promise<MatchProposal> =>
+    serializeDarkCrossPair(command.pairId, async () => {
+      const snapshot = await loadLivePairSnapshot(dependencies, command.pairId);
+      const now = nowIso();
+      const proposal = requireMatchProposalFrom(snapshot.matchProposals, command.proposalId);
+      const accepted = acceptMatchProposal({
+        proposal,
+        accessGrants: snapshot.grants,
+        actorId: command.actorId,
+        acceptedAt: now
+      });
+
+      await dependencies.ledger.saveMatchProposal(accepted);
+      await recordAudit(dependencies, {
+        action: "accept_match_proposal",
+        actorId: command.actorId,
+        at: now,
+        detail: `Match proposal ${accepted.proposalId} accepted by ${command.actorId}.`,
+        entityId: accepted.proposalId,
+        pairId: snapshot.pair.pairId
+      });
+
+      return accepted;
+    });
+
+  const rejectMatch = async (
+    command: RejectMatchCommand
+  ): Promise<{ buyLock: OrderLock; proposal: MatchProposal; sellLock: OrderLock }> =>
+    serializeDarkCrossPair(command.pairId, async () => {
+      const snapshot = await loadLivePairSnapshot(dependencies, command.pairId);
+      const now = nowIso();
+      const proposal = requireMatchProposalFrom(snapshot.matchProposals, command.proposalId);
+      const rejected = rejectMatchProposal({
+        proposal,
+        accessGrants: snapshot.grants,
+        actorId: command.actorId,
+        rejectedAt: now,
+        ...(command.reason !== undefined ? { reason: command.reason } : {})
+      });
+      const buyLock = releaseOrderLock({
+        lock: requireOrderLockFrom(snapshot.orderLocks, proposal.buyLockId),
+        releasedAt: now,
+        releasedBy: command.actorId,
+        reason: "rejected"
+      });
+      const sellLock = releaseOrderLock({
+        lock: requireOrderLockFrom(snapshot.orderLocks, proposal.sellLockId),
+        releasedAt: now,
+        releasedBy: command.actorId,
+        reason: "rejected"
+      });
+
+      await dependencies.ledger.saveMatchProposal(rejected);
+      await dependencies.ledger.saveOrderLock(buyLock);
+      await dependencies.ledger.saveOrderLock(sellLock);
+      await recordAudit(dependencies, {
+        action: "reject_match_proposal",
+        actorId: command.actorId,
+        at: now,
+        detail: `Match proposal ${rejected.proposalId} rejected by ${command.actorId}.`,
+        entityId: rejected.proposalId,
+        pairId: snapshot.pair.pairId
+      });
+
+      return {
+        proposal: rejected,
+        buyLock,
+        sellLock
+      };
+    });
+
+  const releaseExpiredLock = async (
+    command: ReleaseExpiredLockCommand
+  ): Promise<{ locks: readonly OrderLock[]; proposal: MatchProposal }> =>
+    serializeDarkCrossPair(command.pairId, async () => {
+      const snapshot = await loadLivePairSnapshot(dependencies, command.pairId);
+
+      ensureActorCanViewOperatorScope(snapshot.pair, command.actorId);
+
+      const proposal = requireMatchProposalFrom(snapshot.matchProposals, command.proposalId);
+      const locks = [
+        requireOrderLockFrom(snapshot.orderLocks, proposal.buyLockId),
+        requireOrderLockFrom(snapshot.orderLocks, proposal.sellLockId)
+      ];
+
+      if (proposal.status === "pending" || proposal.status === "accepted") {
+        throw createDomainError(
+          "ORDER_LOCK_ACTIVE",
+          "The proposal lock window is still active and cannot be released yet.",
+          {
+            proposalId: proposal.proposalId,
+            status: proposal.status
+          }
+        );
+      }
+
+      return {
+        proposal,
+        locks
+      };
+    });
+
+  const executeSettlement = async (
+    command: ExecuteSettlementCommand
+  ): Promise<ExecuteDarkMatchResult> =>
+    serializeDarkCrossPair(command.pairId, async () => {
+      const snapshot = await loadLivePairSnapshot(dependencies, command.pairId);
+      const now = nowIso();
+      const proposal = requireMatchProposalFrom(snapshot.matchProposals, command.proposalId);
+
+      if (proposal.status === "executed" && proposal.executionId !== undefined) {
+        const executionTicket = snapshot.executions.find(
+          (execution) => execution.executionId === proposal.executionId
+        );
+        const settlementInstruction = snapshot.settlements.find(
+          (instruction) => instruction.executionId === proposal.executionId
+        );
+
+        if (executionTicket !== undefined && settlementInstruction !== undefined) {
+          return {
+            proposal,
+            buyOrder: requireDarkOrderFrom(snapshot.darkOrders, proposal.buyOrderId),
+            sellOrder: requireDarkOrderFrom(snapshot.darkOrders, proposal.sellOrderId),
+            buyLock: requireOrderLockFrom(snapshot.orderLocks, proposal.buyLockId),
+            sellLock: requireOrderLockFrom(snapshot.orderLocks, proposal.sellLockId),
+            executionTicket,
+            settlementInstruction
+          };
+        }
+      }
+
+      const executed = executeDarkMatch({
+        pair: snapshot.pair,
+        accessGrants: snapshot.grants,
+        proposal,
+        buyOrder: requireDarkOrderFrom(snapshot.darkOrders, proposal.buyOrderId),
+        sellOrder: requireDarkOrderFrom(snapshot.darkOrders, proposal.sellOrderId),
+        buyLock: requireOrderLockFrom(snapshot.orderLocks, proposal.buyLockId),
+        sellLock: requireOrderLockFrom(snapshot.orderLocks, proposal.sellLockId),
+        executionId: dependencies.idGenerator.nextId("execution"),
+        instructionId: dependencies.idGenerator.nextId("settlement"),
+        executedAt: now,
+        releasedBy: command.actorId
+      });
+
+      await dependencies.ledger.saveDarkOrder(executed.buyOrder);
+      await dependencies.ledger.saveDarkOrder(executed.sellOrder);
+      await dependencies.ledger.saveOrderLock(executed.buyLock);
+      await dependencies.ledger.saveOrderLock(executed.sellLock);
+      await dependencies.ledger.saveMatchProposal(executed.proposal);
+      await dependencies.ledger.saveExecutionTicket(executed.executionTicket);
+      await dependencies.ledger.saveSettlementInstruction(executed.settlementInstruction);
+      await recordAudit(dependencies, {
+        action: "execute_dark_match",
+        actorId: command.actorId,
+        at: now,
+        detail: `Match proposal ${proposal.proposalId} executed into ${executed.executionTicket.executionId}.`,
+        entityId: executed.executionTicket.executionId,
+        pairId: snapshot.pair.pairId
+      });
+
+      return executed;
+    });
+
+  const getDarkSubscriberState = async (
+    pairId: string,
+    subscriberId: string,
+    actorId: string
+  ): Promise<DarkSubscriberState | null> => {
+    const pair = await dependencies.ledger.getPair(pairId);
+
+    if (pair === null) {
+      return null;
+    }
+
+    const snapshot = await loadLivePairSnapshot(dependencies, pairId);
+
+    ensureActorCanViewSubscriberScope(snapshot.pair, snapshot.grants, actorId, subscriberId);
+
+    const orders = snapshot.darkOrders.filter((order) => order.subscriberId === subscriberId);
+    const visibleOrderIds = new Set(orders.map((order) => order.orderId));
+    const proposals = snapshot.matchProposals.filter(
+      (proposal) =>
+        proposal.buySubscriberId === subscriberId || proposal.sellSubscriberId === subscriberId
+    );
+    const proposalLockIds = new Set(
+      proposals.flatMap((proposal) => [proposal.buyLockId, proposal.sellLockId])
+    );
+    const locks = snapshot.orderLocks.filter(
+      (lock) => proposalLockIds.has(lock.lockId) || visibleOrderIds.has(lock.orderId)
+    );
+    const executions = snapshot.executions.filter(
+      (execution) =>
+        execution.executionKind === "dark_cross" &&
+        (execution.buySubscriberId === subscriberId || execution.sellSubscriberId === subscriberId)
+    );
+    const executionIds = new Set(executions.map((execution) => execution.executionId));
+    const settlements = snapshot.settlements.filter(
+      (instruction) =>
+        instruction.settlementKind === "dark_cross" && executionIds.has(instruction.executionId)
+    );
+
+    return {
+      subscriberId,
+      orders,
+      proposals,
+      locks,
+      executions,
+      settlements
+    };
+  };
+
   const listPairs = async (): Promise<readonly PairInstance[]> => dependencies.ledger.listPairs();
 
   const getOperatorView = async (pairId: string, actorId: string): Promise<OperatorView | null> => {
@@ -1450,6 +2097,13 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
     acceptQuote,
     rejectAllQuotes: rejectAllPairQuotes,
     markSettlementProgression,
+    submitDarkOrder,
+    cancelDarkOrder: cancelDarkOrderCommand,
+    generateMatchProposal,
+    acceptMatch,
+    rejectMatch,
+    releaseExpiredLock,
+    executeSettlement,
     listPairs,
     getOperatorView,
     getSubscriberView,
@@ -1458,6 +2112,7 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
     getVenueHealth,
     getSubscriberQuoteLadder,
     getDealerInvitationHistory,
-    getOperatorOversightView
+    getOperatorOversightView,
+    getDarkSubscriberState
   };
 };

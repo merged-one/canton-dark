@@ -10,7 +10,10 @@ import type {
   AuditRecord,
   DealerInvitation,
   DealerQuote,
+  DarkOrder,
   ExecutionTicket,
+  MatchProposal,
+  OrderLock,
   PairInstance,
   QuoteRevision,
   QuoteWithdrawal,
@@ -30,8 +33,11 @@ export type SeededIdGenerator = IdGenerator & {
 export type InMemoryLedgerPort = LedgerPort & {
   snapshot: () => {
     accessGrants: AccessGrant[];
+    darkOrders: DarkOrder[];
     executions: ExecutionTicket[];
     invitations: DealerInvitation[];
+    matchProposals: MatchProposal[];
+    orderLocks: OrderLock[];
     pairs: PairInstance[];
     quoteRevisions: QuoteRevision[];
     quoteWithdrawals: QuoteWithdrawal[];
@@ -97,15 +103,27 @@ export const createInMemoryLedgerPort = (): InMemoryLedgerPort => {
   const invitations = new Map<string, DealerInvitation>();
   const quoteRevisions = new Map<string, QuoteRevision>();
   const quoteWithdrawals = new Map<string, QuoteWithdrawal>();
+  const darkOrders = new Map<string, DarkOrder>();
+  const orderLocks = new Map<string, OrderLock>();
+  const matchProposals = new Map<string, MatchProposal>();
   const executions = new Map<string, ExecutionTicket>();
   const settlements = new Map<string, SettlementInstruction>();
 
   return {
+    async getDarkOrder(orderId) {
+      return clone(darkOrders.get(orderId) ?? null);
+    },
     async getExecutionTicket(executionId) {
       return clone(executions.get(executionId) ?? null);
     },
+    async getMatchProposal(proposalId) {
+      return clone(matchProposals.get(proposalId) ?? null);
+    },
     async getPair(pairId) {
       return clone(pairs.get(pairId) ?? null);
+    },
+    async getOrderLock(lockId) {
+      return clone(orderLocks.get(lockId) ?? null);
     },
     async getQuote(quoteId) {
       return clone(quotes.get(quoteId) ?? null);
@@ -119,11 +137,20 @@ export const createInMemoryLedgerPort = (): InMemoryLedgerPort => {
     async listAccessGrants(pairId) {
       return clone(accessGrants.get(pairId) ?? []);
     },
+    async listDarkOrders(pairId) {
+      return clone([...darkOrders.values()].filter((order) => order.pairId === pairId));
+    },
     async listExecutionTickets(pairId) {
       return clone([...executions.values()].filter((execution) => execution.pairId === pairId));
     },
     async listInvitations(pairId) {
       return clone([...invitations.values()].filter((invitation) => invitation.pairId === pairId));
+    },
+    async listMatchProposals(pairId) {
+      return clone([...matchProposals.values()].filter((proposal) => proposal.pairId === pairId));
+    },
+    async listOrderLocks(pairId) {
+      return clone([...orderLocks.values()].filter((lock) => lock.pairId === pairId));
     },
     async listPairs() {
       return clone([...pairs.values()]);
@@ -148,11 +175,20 @@ export const createInMemoryLedgerPort = (): InMemoryLedgerPort => {
     async saveAccessGrant(grant) {
       accessGrants.set(grant.pairId, [...(accessGrants.get(grant.pairId) ?? []), clone(grant)]);
     },
+    async saveDarkOrder(order) {
+      darkOrders.set(order.orderId, clone(order));
+    },
     async saveExecutionTicket(execution) {
       executions.set(execution.executionId, clone(execution));
     },
     async saveInvitation(invitation) {
       invitations.set(invitation.invitationId, clone(invitation));
+    },
+    async saveMatchProposal(proposal) {
+      matchProposals.set(proposal.proposalId, clone(proposal));
+    },
+    async saveOrderLock(lock) {
+      orderLocks.set(lock.lockId, clone(lock));
     },
     async savePair(pair) {
       pairs.set(pair.pairId, clone(pair));
@@ -175,11 +211,14 @@ export const createInMemoryLedgerPort = (): InMemoryLedgerPort => {
     snapshot: () => ({
       pairs: clone([...pairs.values()]),
       accessGrants: clone([...accessGrants.values()].flat()),
+      darkOrders: clone([...darkOrders.values()]),
       rfqs: clone([...rfqs.values()]),
       quotes: clone([...quotes.values()]),
       invitations: clone([...invitations.values()]),
       quoteRevisions: clone([...quoteRevisions.values()]),
       quoteWithdrawals: clone([...quoteWithdrawals.values()]),
+      orderLocks: clone([...orderLocks.values()]),
+      matchProposals: clone([...matchProposals.values()]),
       executions: clone([...executions.values()]),
       settlements: clone([...settlements.values()])
     })

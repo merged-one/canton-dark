@@ -361,7 +361,7 @@ describe("sim-harness", () => {
   it("builds deterministic phase 2 demo steps and seed metadata", async () => {
     const environment = createMemoryVenueEnvironment();
 
-    expect(createPhase2DemoSteps("phase2-ready")).toHaveLength(5);
+    expect(createPhase2DemoSteps()).toHaveLength(5);
 
     const seeded = await seedPhase2DemoEnvironment(environment, {
       mode: "phase2-ready",

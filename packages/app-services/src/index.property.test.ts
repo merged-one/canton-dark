@@ -6,7 +6,10 @@ import type {
   AuditRecord,
   DealerInvitation,
   DealerQuote,
+  DarkOrder,
   ExecutionTicket,
+  MatchProposal,
+  OrderLock,
   PairInstance,
   QuoteRevision,
   QuoteWithdrawal,
@@ -30,15 +33,27 @@ const createPropertyDependencies = (): VenueApplicationDependencies => {
   const invitations = new Map<string, DealerInvitation>();
   const quoteRevisions = new Map<string, QuoteRevision>();
   const quoteWithdrawals = new Map<string, QuoteWithdrawal>();
+  const darkOrders = new Map<string, DarkOrder>();
+  const orderLocks = new Map<string, OrderLock>();
+  const matchProposals = new Map<string, MatchProposal>();
   const executions = new Map<string, ExecutionTicket>();
   const settlements = new Map<string, SettlementInstruction>();
   const audits: AuditRecord[] = [];
   const ledger: LedgerPort = {
+    async getDarkOrder(orderId) {
+      return structuredClone(darkOrders.get(orderId) ?? null);
+    },
     async getExecutionTicket(executionId) {
       return structuredClone(executions.get(executionId) ?? null);
     },
+    async getMatchProposal(proposalId) {
+      return structuredClone(matchProposals.get(proposalId) ?? null);
+    },
     async getPair(pairId) {
       return structuredClone(pairs.get(pairId) ?? null);
+    },
+    async getOrderLock(lockId) {
+      return structuredClone(orderLocks.get(lockId) ?? null);
     },
     async getQuote(quoteId) {
       return structuredClone(quotes.get(quoteId) ?? null);
@@ -52,6 +67,9 @@ const createPropertyDependencies = (): VenueApplicationDependencies => {
     async listAccessGrants(pairId) {
       return structuredClone(accessGrants.get(pairId) ?? []);
     },
+    async listDarkOrders(pairId) {
+      return structuredClone([...darkOrders.values()].filter((order) => order.pairId === pairId));
+    },
     async listExecutionTickets(pairId) {
       return structuredClone(
         [...executions.values()].filter((execution) => execution.pairId === pairId)
@@ -61,6 +79,14 @@ const createPropertyDependencies = (): VenueApplicationDependencies => {
       return structuredClone(
         [...invitations.values()].filter((invitation) => invitation.pairId === pairId)
       );
+    },
+    async listMatchProposals(pairId) {
+      return structuredClone(
+        [...matchProposals.values()].filter((proposal) => proposal.pairId === pairId)
+      );
+    },
+    async listOrderLocks(pairId) {
+      return structuredClone([...orderLocks.values()].filter((lock) => lock.pairId === pairId));
     },
     async listPairs() {
       return structuredClone([...pairs.values()]);
@@ -92,11 +118,20 @@ const createPropertyDependencies = (): VenueApplicationDependencies => {
         structuredClone(grant)
       ]);
     },
+    async saveDarkOrder(order) {
+      darkOrders.set(order.orderId, structuredClone(order));
+    },
     async saveExecutionTicket(execution) {
       executions.set(execution.executionId, structuredClone(execution));
     },
     async saveInvitation(invitation) {
       invitations.set(invitation.invitationId, structuredClone(invitation));
+    },
+    async saveMatchProposal(proposal) {
+      matchProposals.set(proposal.proposalId, structuredClone(proposal));
+    },
+    async saveOrderLock(lock) {
+      orderLocks.set(lock.lockId, structuredClone(lock));
     },
     async savePair(pair) {
       pairs.set(pair.pairId, structuredClone(pair));
@@ -335,6 +370,153 @@ describe("app-services properties", () => {
         }
       ),
       createDeterministicPropertyConfig({ numRuns: 8 })
+    );
+  });
+
+  it("duplicate dark-order submissions stay idempotent under repeated commands", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.integer({ min: 5, max: 50 }),
+        fc.integer({ min: 100, max: 120 }),
+        async (quantity, limitPrice) => {
+          const app = createVenueApplication(createPropertyDependencies());
+          const pair = await app.createPair({
+            actorId: "operator-1",
+            operatorId: "operator-1",
+            mode: "ATSPair",
+            dealerIds: ["dealer-alpha", "dealer-beta"],
+            jurisdiction: "US",
+            rulebookSummary: "initial",
+            rulebookVersion: "v3"
+          });
+
+          await app.grantAccess({
+            actorId: "operator-1",
+            pairId: pair.pairId,
+            subjectId: "subscriber-1",
+            role: "subscriber"
+          });
+
+          const first = await app.submitDarkOrder({
+            actorId: "subscriber-1",
+            pairId: pair.pairId,
+            clientOrderId: "duplicate-dark-order",
+            instrumentId: "CUSIP-DARK-PROP",
+            side: "buy",
+            quantity,
+            limitPrice,
+            expiresAt: "2026-04-02T00:10:00.000Z"
+          });
+          const duplicate = await app.submitDarkOrder({
+            actorId: "subscriber-1",
+            pairId: pair.pairId,
+            clientOrderId: "duplicate-dark-order",
+            instrumentId: "CUSIP-DARK-PROP",
+            side: "buy",
+            quantity,
+            limitPrice,
+            expiresAt: "2026-04-02T00:10:00.000Z"
+          });
+
+          expect(duplicate.orderId).toBe(first.orderId);
+
+          const subscriberState = await app.getDarkSubscriberState(
+            pair.pairId,
+            "subscriber-1",
+            "subscriber-1"
+          );
+
+          expect(subscriberState?.orders).toHaveLength(1);
+        }
+      ),
+      createDeterministicPropertyConfig({ numRuns: 12 })
+    );
+  });
+
+  it("dark subscriber views never leak another subscriber's orders or proposals", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 100, max: 120 }), async (buyLimitPrice) => {
+        const app = createVenueApplication(createPropertyDependencies());
+        const pair = await app.createPair({
+          actorId: "operator-1",
+          operatorId: "operator-1",
+          mode: "ATSPair",
+          dealerIds: ["dealer-alpha", "dealer-beta"],
+          jurisdiction: "US",
+          rulebookSummary: "initial",
+          rulebookVersion: "v3"
+        });
+
+        await app.grantAccess({
+          actorId: "operator-1",
+          pairId: pair.pairId,
+          subjectId: "subscriber-1",
+          role: "subscriber"
+        });
+        await app.grantAccess({
+          actorId: "operator-1",
+          pairId: pair.pairId,
+          subjectId: "subscriber-2",
+          role: "subscriber"
+        });
+
+        const buyOrder = await app.submitDarkOrder({
+          actorId: "subscriber-1",
+          pairId: pair.pairId,
+          clientOrderId: "privacy-buy",
+          instrumentId: "CUSIP-DARK-PRIV",
+          side: "buy",
+          quantity: 10,
+          limitPrice: buyLimitPrice,
+          expiresAt: "2026-04-02T00:10:00.000Z"
+        });
+        const sellOrder = await app.submitDarkOrder({
+          actorId: "subscriber-2",
+          pairId: pair.pairId,
+          clientOrderId: "privacy-sell",
+          instrumentId: "CUSIP-DARK-PRIV",
+          side: "sell",
+          quantity: 10,
+          limitPrice: buyLimitPrice - 1,
+          expiresAt: "2026-04-02T00:10:00.000Z"
+        });
+
+        await app.generateMatchProposal({
+          actorId: "operator-1",
+          pairId: pair.pairId,
+          buyOrderId: buyOrder.orderId,
+          sellOrderId: sellOrder.orderId
+        });
+
+        const subscriberOneView = await app.getDarkSubscriberState(
+          pair.pairId,
+          "subscriber-1",
+          "subscriber-1"
+        );
+        const subscriberTwoView = await app.getDarkSubscriberState(
+          pair.pairId,
+          "subscriber-2",
+          "subscriber-2"
+        );
+
+        expect(
+          subscriberOneView?.orders.every((order) => order.subscriberId === "subscriber-1")
+        ).toBe(true);
+        expect(
+          subscriberTwoView?.orders.every((order) => order.subscriberId === "subscriber-2")
+        ).toBe(true);
+        expect(
+          subscriberOneView?.proposals.every(
+            (proposal) =>
+              proposal.buySubscriberId === "subscriber-1" ||
+              proposal.sellSubscriberId === "subscriber-1"
+          )
+        ).toBe(true);
+        await expect(
+          app.getDarkSubscriberState(pair.pairId, "subscriber-1", "subscriber-2")
+        ).rejects.toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+      }),
+      createDeterministicPropertyConfig({ numRuns: 10 })
     );
   });
 });

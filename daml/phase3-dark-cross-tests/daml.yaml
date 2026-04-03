@@ -1,0 +1,12 @@
+sdk-version: 2.9.0
+name: canton-dark-phase3-dark-cross-tests
+version: 0.0.1
+source: src
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+  - ../core/.daml/dist/canton-dark-daml-core-0.0.1.dar
+  - ../phase2-ats-rfq/.daml/dist/canton-dark-phase2-ats-rfq-0.0.1.dar
+  - ../phase3-dark-cross/.daml/dist/canton-dark-phase3-dark-cross-0.0.1.dar
+init-script: CantonDark.Phase3.DarkCross.Tests:all

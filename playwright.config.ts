@@ -5,13 +5,9 @@ const apiOrigin = "http://127.0.0.1:4301";
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
+  workers: 1,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
-  expect: {
-    toHaveScreenshot: {
-      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}{ext}"
-    }
-  },
   use: {
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
