@@ -4,9 +4,12 @@ import { describe, expect, it } from "vitest";
 import {
   compareQuotePriority,
   acceptDealerQuote,
+  canDarkOrdersCross,
   createAccessGrant,
   createDealerInvitations,
   createDealerQuote,
+  createDarkOrder,
+  createMatchProposal,
   createPairInstance,
   createRfqSession,
   expireDealerQuote,
@@ -15,6 +18,7 @@ import {
   markRfqQuoted,
   resolveEntitlements,
   revokeAccessGrant,
+  synchronizeDarkCrossLifecycle,
   synchronizeRfqLifecycle
 } from "./index";
 
@@ -421,6 +425,133 @@ describe("phase 1 domain-core properties", () => {
           }).rfq.status
         ).toBe("quote_expired");
       }),
+      createDeterministicPropertyConfig({ numRuns: 20 })
+    );
+  });
+
+  it("dark-cross proposals stay pending before expiry and expire active locks at the boundary", () => {
+    const pair = createPairInstance({
+      pairId: "pair-dark-prop",
+      mode: "ATSPair",
+      operatorId: "operator-1",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      operatorOversightRole: "blinded",
+      createdAt,
+      operatorApproval: {
+        status: "approved",
+        approvedAt: createdAt,
+        approvedBy: "operator-1"
+      },
+      regulatoryAttestation: {
+        status: "attested",
+        attestedAt: createdAt,
+        attestedBy: "auditor-1",
+        jurisdiction: "US"
+      },
+      rulebookRelease: {
+        releaseId: "rulebook-dark-prop",
+        version: "v1",
+        effectiveAt: createdAt,
+        publishedBy: "operator-1",
+        summary: "initial"
+      }
+    });
+    const grants = [
+      createAccessGrant({
+        grantId: "grant-dark-sub-1",
+        pairId: pair.pairId,
+        subjectId: "subscriber-1",
+        role: "subscriber",
+        grantedAt: createdAt,
+        grantedBy: "operator-1"
+      }),
+      createAccessGrant({
+        grantId: "grant-dark-sub-2",
+        pairId: pair.pairId,
+        subjectId: "subscriber-2",
+        role: "subscriber",
+        grantedAt: createdAt,
+        grantedBy: "operator-1"
+      }),
+      createAccessGrant({
+        grantId: "grant-dark-op",
+        pairId: pair.pairId,
+        subjectId: "operator-1",
+        role: "operator",
+        grantedAt: createdAt,
+        grantedBy: "operator-1"
+      })
+    ];
+
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 101, max: 130 }),
+        fc.integer({ min: 90, max: 100 }),
+        fc.integer({ min: 1, max: 59 }),
+        (buyLimitPrice, sellLimitPrice, secondsBeforeExpiry) => {
+          const buyOrder = createDarkOrder({
+            orderId: "dark-buy-prop",
+            clientOrderId: "client-buy-prop",
+            pair,
+            accessGrants: grants,
+            subscriberId: "subscriber-1",
+            instrumentId: "CUSIP-DARK-PROP",
+            side: "buy",
+            quantity: 25,
+            limitPrice: buyLimitPrice,
+            createdAt,
+            expiresAt: "2026-04-02T00:10:00.000Z"
+          });
+          const sellOrder = createDarkOrder({
+            orderId: "dark-sell-prop",
+            clientOrderId: "client-sell-prop",
+            pair,
+            accessGrants: grants,
+            subscriberId: "subscriber-2",
+            instrumentId: "CUSIP-DARK-PROP",
+            side: "sell",
+            quantity: 25,
+            limitPrice: sellLimitPrice,
+            createdAt,
+            expiresAt: "2026-04-02T00:10:00.000Z"
+          });
+          const created = createMatchProposal({
+            pair,
+            accessGrants: grants,
+            buyOrder,
+            sellOrder,
+            proposalId: "proposal-dark-prop",
+            buyLockId: "lock-dark-buy",
+            sellLockId: "lock-dark-sell",
+            createdAt: "2026-04-02T00:01:00.000Z",
+            createdBy: "operator-1",
+            expiresAt: "2026-04-02T00:02:00.000Z"
+          });
+          const beforeExpiryAt = new Date(
+            Date.parse("2026-04-02T00:02:00.000Z") - secondsBeforeExpiry * 1_000
+          ).toISOString();
+
+          expect(canDarkOrdersCross(buyOrder, sellOrder)).toBe(true);
+          expect(
+            synchronizeDarkCrossLifecycle({
+              orders: [buyOrder, sellOrder],
+              locks: [created.buyLock, created.sellLock],
+              proposals: [created.proposal],
+              observedAt: beforeExpiryAt
+            }).proposals[0]?.status
+          ).toBe("pending");
+
+          const atExpiry = synchronizeDarkCrossLifecycle({
+            orders: [buyOrder, sellOrder],
+            locks: [created.buyLock, created.sellLock],
+            proposals: [created.proposal],
+            observedAt: "2026-04-02T00:02:00.000Z"
+          });
+
+          expect(atExpiry.proposals[0]?.status).toBe("expired");
+          expect(atExpiry.locks.every((lock) => lock.status === "expired")).toBe(true);
+        }
+      ),
       createDeterministicPropertyConfig({ numRuns: 20 })
     );
   });

@@ -1430,9 +1430,7 @@ describe("ui-sdk controllers", () => {
 
     submit(root, "[data-testid='dealer-quote-form']");
     await flushUpdates();
-    expect(root.textContent).toContain(
-      "Select an invitation before submitting or revising a quote."
-    );
+    expect(root.textContent).toContain("Select an RFQ before submitting or revising a quote.");
 
     setValue(root, "#dealer-actor-id", "dealer-outsider");
     submit(root, "[data-testid='dealer-session-form']");
@@ -1495,7 +1493,7 @@ describe("ui-sdk controllers", () => {
     expect(root.textContent).toContain("No pair is currently visible for this dealer.");
   });
 
-  it("surfaces the dealer missing-selection error when history is visible but no invitation is selected", async () => {
+  it("retains a manually selected routed RFQ when history has no explicit invitations", async () => {
     const root = document.createElement("div");
     const storage = createStorage();
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
@@ -1506,7 +1504,52 @@ describe("ui-sdk controllers", () => {
       }
 
       if (url.includes("/views/dealer-workbench")) {
-        return jsonResponse(dealerWorkbenchView);
+        return jsonResponse(dealerWorkbenchWithExecutionView);
+      }
+
+      if (url.endsWith("/pairs/pair-phase2-demo/dealers/dealer-alpha/history")) {
+        return jsonResponse(dealerHistoryNoInvitationsView);
+      }
+
+      throw new Error(`Unhandled request: ${url}`);
+    });
+
+    await mountDealerWorkbench({
+      apiBaseUrl: "http://unit.test",
+      fetchImpl: asFetch(fetchImpl),
+      location: new URL("http://localhost/?pairId=pair-phase2-demo"),
+      root,
+      storage: asStorage(storage)
+    });
+
+    click(root, "[data-action='select-rfq']");
+    await flushUpdates();
+
+    expect(root.querySelector<HTMLInputElement>("#dealer-selected-rfq")?.value).toBe("rfq-older");
+    expect(root.textContent).toContain("Loaded RFQ rfq-older.");
+
+    click(root, "[data-action='refresh-pair']");
+    await flushUpdates();
+
+    expect(root.querySelector<HTMLInputElement>("#dealer-selected-rfq")?.value).toBe("rfq-older");
+    expect(root.textContent).toContain("No invitations are visible for this dealer.");
+  });
+
+  it("surfaces the dealer missing-selection error when no routed RFQ or invitation is selected", async () => {
+    const root = document.createElement("div");
+    const storage = createStorage();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+
+      if (url.endsWith("/demo/status")) {
+        return jsonResponse(demoStatus);
+      }
+
+      if (url.includes("/views/dealer-workbench")) {
+        return jsonResponse({
+          ...dealerWorkbenchView,
+          rfqs: []
+        });
       }
 
       if (url.endsWith("/pairs/pair-phase2-demo/dealers/dealer-alpha/history")) {
@@ -1528,9 +1571,8 @@ describe("ui-sdk controllers", () => {
     await flushUpdates();
 
     expect(root.textContent).toContain("No invitations are visible for this dealer.");
-    expect(root.textContent).toContain(
-      "Select an invitation before submitting or revising a quote."
-    );
+    expect(root.textContent).toContain("No routed RFQs are visible for this dealer.");
+    expect(root.textContent).toContain("Select an RFQ before submitting or revising a quote.");
   });
 
   it("renders demo orchestration controls for phase 1, phase 2, and clock advance", async () => {

@@ -34,13 +34,19 @@ describe("adapters-memory", () => {
     expect(await ledger.getPair("missing")).toBeNull();
     expect(await ledger.getRfq("missing")).toBeNull();
     expect(await ledger.getQuote("missing")).toBeNull();
+    expect(await ledger.getDarkOrder("missing")).toBeNull();
+    expect(await ledger.getOrderLock("missing")).toBeNull();
+    expect(await ledger.getMatchProposal("missing")).toBeNull();
     expect(await ledger.getExecutionTicket("missing")).toBeNull();
     expect(await ledger.getSettlementInstruction("missing")).toBeNull();
     expect(await ledger.listPairs()).toEqual([]);
     expect(await ledger.listAccessGrants("missing")).toEqual([]);
     expect(await ledger.listRfqs("missing")).toEqual([]);
     expect(await ledger.listQuotes("missing")).toEqual([]);
+    expect(await ledger.listDarkOrders("missing")).toEqual([]);
     expect(await ledger.listInvitations("missing")).toEqual([]);
+    expect(await ledger.listOrderLocks("missing")).toEqual([]);
+    expect(await ledger.listMatchProposals("missing")).toEqual([]);
     expect(await ledger.listQuoteRevisions("missing")).toEqual([]);
     expect(await ledger.listQuoteWithdrawals("missing")).toEqual([]);
     expect(await ledger.listExecutionTickets("missing")).toEqual([]);
@@ -114,6 +120,19 @@ describe("adapters-memory", () => {
       updatedAt: "2026-04-02T00:02:00.000Z",
       status: "open"
     });
+    await ledger.saveDarkOrder({
+      orderId: "dark-order-1",
+      clientOrderId: "dark-client-1",
+      pairId: "pair-1",
+      subscriberId: "subscriber-1",
+      instrumentId: "CUSIP-1",
+      side: "buy",
+      quantity: 10,
+      limitPrice: 100.5,
+      createdAt: "2026-04-02T00:02:30.000Z",
+      updatedAt: "2026-04-02T00:02:30.000Z",
+      status: "open"
+    });
     await ledger.saveInvitation({
       invitationId: "invitation-1",
       pairId: "pair-1",
@@ -127,6 +146,38 @@ describe("adapters-memory", () => {
       updatedAt: "2026-04-02T00:02:00.000Z",
       status: "responded",
       respondedAt: "2026-04-02T00:02:00.000Z"
+    });
+    await ledger.saveOrderLock({
+      lockId: "lock-1",
+      pairId: "pair-1",
+      orderId: "dark-order-1",
+      proposalId: "proposal-1",
+      subscriberId: "subscriber-1",
+      lockedAt: "2026-04-02T00:02:45.000Z",
+      lockedBy: "operator-1",
+      lockExpiresAt: "2026-04-02T00:03:15.000Z",
+      updatedAt: "2026-04-02T00:02:45.000Z",
+      status: "active"
+    });
+    await ledger.saveMatchProposal({
+      proposalId: "proposal-1",
+      pairId: "pair-1",
+      instrumentId: "CUSIP-1",
+      quantity: 10,
+      price: 100.5,
+      buyOrderId: "dark-order-1",
+      sellOrderId: "dark-order-2",
+      buySubscriberId: "subscriber-1",
+      sellSubscriberId: "subscriber-2",
+      buyLockId: "lock-1",
+      sellLockId: "lock-2",
+      buyResponse: "pending",
+      sellResponse: "pending",
+      createdAt: "2026-04-02T00:02:45.000Z",
+      createdBy: "operator-1",
+      expiresAt: "2026-04-02T00:03:15.000Z",
+      updatedAt: "2026-04-02T00:02:45.000Z",
+      status: "pending"
     });
     await ledger.saveQuoteRevision({
       revisionId: "revision-1",
@@ -184,7 +235,10 @@ describe("adapters-memory", () => {
     expect(await ledger.listAccessGrants("pair-1")).toHaveLength(1);
     expect(await ledger.listRfqs("pair-1")).toHaveLength(1);
     expect(await ledger.listQuotes("pair-1")).toHaveLength(1);
+    expect(await ledger.listDarkOrders("pair-1")).toHaveLength(1);
     expect(await ledger.listInvitations("pair-1")).toHaveLength(1);
+    expect(await ledger.listOrderLocks("pair-1")).toHaveLength(1);
+    expect(await ledger.listMatchProposals("pair-1")).toHaveLength(1);
     expect(await ledger.listQuoteRevisions("pair-1")).toHaveLength(1);
     expect(await ledger.listQuoteWithdrawals("pair-1")).toHaveLength(1);
     expect(await ledger.listExecutionTickets("pair-1")).toHaveLength(1);
@@ -203,9 +257,12 @@ describe("adapters-memory", () => {
     expect(ledger.snapshot()).toEqual({
       pairs: await ledger.listPairs(),
       accessGrants: await ledger.listAccessGrants("pair-1"),
+      darkOrders: await ledger.listDarkOrders("pair-1"),
       rfqs: await ledger.listRfqs("pair-1"),
       quotes: await ledger.listQuotes("pair-1"),
       invitations: await ledger.listInvitations("pair-1"),
+      orderLocks: await ledger.listOrderLocks("pair-1"),
+      matchProposals: await ledger.listMatchProposals("pair-1"),
       quoteRevisions: await ledger.listQuoteRevisions("pair-1"),
       quoteWithdrawals: await ledger.listQuoteWithdrawals("pair-1"),
       executions: await ledger.listExecutionTickets("pair-1"),

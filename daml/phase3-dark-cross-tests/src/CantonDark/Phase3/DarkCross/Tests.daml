@@ -1,0 +1,241 @@
+module CantonDark.Phase3.DarkCross.Tests where
+
+import DA.Assert (assertEq)
+import DA.Date (date)
+import DA.List (length)
+import DA.Time (time)
+import Daml.Script
+import CantonDark.Core.Types
+import qualified CantonDark.Phase2.ATSRfq as Phase2
+import CantonDark.Phase3.DarkCross
+
+data Fixture = Fixture with
+  darkPoolCid : ContractId DarkPool
+  operator : Party
+  pairCid : ContractId Phase2.PairInstance
+  pairId : Text
+  settler : Party
+  subscriberOne : Party
+  subscriberTwo : Party
+
+setupFixture : Text -> Time -> Script Fixture
+setupFixture label startTime = script do
+  setTime startTime
+  operator <- allocateParty ("operator-dark-" <> label)
+  dealerAlpha <- allocateParty ("dealer-alpha-dark-" <> label)
+  dealerBeta <- allocateParty ("dealer-beta-dark-" <> label)
+  subscriberOne <- allocateParty ("subscriber-one-dark-" <> label)
+  subscriberTwo <- allocateParty ("subscriber-two-dark-" <> label)
+  settler <- allocateParty ("settler-dark-" <> label)
+  let pairId = "pair-dark-" <> label
+  approvalCid <- submit operator do
+    createCmd Phase2.OperatorApproval with
+      pairId
+      operator
+      dealers = [dealerAlpha, dealerBeta]
+      approvedAt = startTime
+      approvedBy = operator
+      note = None
+      status = ApprovalApproved
+  attestationCid <- submit operator do
+    createCmd Phase2.RegulatoryAttestation with
+      pairId
+      operator
+      dealers = [dealerAlpha, dealerBeta]
+      attestedAt = startTime
+      attestedBy = operator
+      jurisdiction = "US"
+      status = AttestationAttested
+  rulebookCid <- submit operator do
+    createCmd Phase2.RulebookRelease with
+      pairId
+      operator
+      dealers = [dealerAlpha, dealerBeta]
+      effectiveAt = startTime
+      publishedBy = operator
+      releaseId = "rulebook-dark-" <> label
+      summary = "phase 3 dark cross"
+      version = "v3"
+  pairContracts <- submit operator do
+    exerciseCmd approvalCid InstantiatePair with
+      attestationCid
+      inviteRevisionPolicy = InviteSetBeforeFirstResponse
+      oversightRole = OversightBlinded
+      rulebookCid
+  _ <- submit operator do
+    exerciseCmd pairContracts.pairCid GrantAccess with
+      grantId = "grant-subscriber-one-" <> label
+      subject = subscriberOne
+      role = SubscriberRole
+      extraEntitlements = []
+      note = None
+  _ <- submit operator do
+    exerciseCmd pairContracts.pairCid GrantAccess with
+      grantId = "grant-subscriber-two-" <> label
+      subject = subscriberTwo
+      role = SubscriberRole
+      extraEntitlements = []
+      note = None
+  _ <- submit operator do
+    exerciseCmd pairContracts.pairCid GrantAccess with
+      grantId = "grant-settler-" <> label
+      subject = settler
+      role = SettlementDelegateRole
+      extraEntitlements = []
+      note = None
+  darkPoolCid <- submit operator do
+    createCmd DarkPool with
+      operator
+      pairId
+      createdAt = startTime
+  pure Fixture with
+    darkPoolCid
+    operator
+    pairCid = pairContracts.pairCid
+    pairId
+    settler
+    subscriberOne
+    subscriberTwo
+
+submitDarkOrder :
+  ContractId DarkPool ->
+  Party ->
+  Text ->
+  Text ->
+  RFQSide ->
+  Decimal ->
+  Decimal ->
+  Optional Time ->
+  Script (ContractId DarkOrder)
+submitDarkOrder darkPoolCid subscriber orderId clientOrderId side quantity limitPrice expiresAt = do
+  submission <- submit subscriber do
+    exerciseCmd darkPoolCid SubmitDarkOrder with
+      subscriber
+      orderId
+      clientOrderId
+      instrumentId = "CUSIP-DARK-1"
+      side
+      quantity
+      limitPrice
+      expiresAt
+  pure submission.orderCid
+
+happyPath : Script ()
+happyPath = script do
+  fixture <- setupFixture "happy" (time (date 2026 Apr 20) 0 0 0)
+  buyOrderCid <- submitDarkOrder fixture.darkPoolCid fixture.subscriberOne "dark-buy-1" "client-buy-1" Buy 25.0 101.0 (Some (time (date 2026 Apr 20) 0 10 0))
+  duplicateBuyOrder <- submitDarkOrder fixture.darkPoolCid fixture.subscriberOne "dark-buy-1" "client-buy-1" Buy 25.0 101.0 (Some (time (date 2026 Apr 20) 0 10 0))
+  _ <- submitDarkOrder fixture.darkPoolCid fixture.subscriberTwo "dark-sell-1" "client-sell-1" Sell 25.0 100.0 (Some (time (date 2026 Apr 20) 0 10 0))
+  assertEq buyOrderCid duplicateBuyOrder
+  subscriberOneOrders <- query @DarkOrder fixture.subscriberOne
+  subscriberTwoOrders <- query @DarkOrder fixture.subscriberTwo
+  operatorOrders <- query @DarkOrder fixture.operator
+  assertEq 1 (length subscriberOneOrders)
+  assertEq 1 (length subscriberTwoOrders)
+  assertEq 2 (length operatorOrders)
+  created <- submit fixture.operator do
+    exerciseCmd fixture.darkPoolCid CreateMatchProposal with
+      buyOrderId = "dark-buy-1"
+      sellOrderId = "dark-sell-1"
+      proposalId = "proposal-dark-1"
+      buyLockId = "lock-buy-1"
+      sellLockId = "lock-sell-1"
+      expiresAt = time (date 2026 Apr 20) 0 2 0
+  subscriberOneLocks <- query @OrderLock fixture.subscriberOne
+  subscriberTwoLocks <- query @OrderLock fixture.subscriberTwo
+  subscriberOneProposals <- query @MatchProposal fixture.subscriberOne
+  subscriberTwoProposals <- query @MatchProposal fixture.subscriberTwo
+  assertEq 1 (length subscriberOneLocks)
+  assertEq 1 (length subscriberTwoLocks)
+  assertEq 1 (length subscriberOneProposals)
+  assertEq 1 (length subscriberTwoProposals)
+  acceptedOnceCid <- submit fixture.subscriberOne do
+    exerciseCmd created.proposalCid Accept with
+      actor = fixture.subscriberOne
+  acceptedTwiceCid <- submit fixture.subscriberTwo do
+    exerciseCmd acceptedOnceCid Accept with
+      actor = fixture.subscriberTwo
+  executed <- submit fixture.operator do
+    exerciseCmd acceptedTwiceCid Execute with
+      executionId = "execution-dark-1"
+      instructionId = "instruction-dark-1"
+      settlementAgent = Some fixture.settler
+  progressedCid <- submit fixture.settler do
+    exerciseCmd executed.settlementInstructionCid MarkProgression with
+      actor = fixture.settler
+      nextStatus = SettlementAffirmed
+  executionsOne <- query @ExecutionTicket fixture.subscriberOne
+  executionsTwo <- query @ExecutionTicket fixture.subscriberTwo
+  progressed <- queryContractId fixture.operator progressedCid
+  case progressed of
+    Some instruction -> assertEq SettlementAffirmed instruction.status
+    None -> abort "Expected progressed settlement instruction."
+  assertEq 1 (length executionsOne)
+  assertEq 1 (length executionsTwo)
+  setTime (time (date 2026 Apr 20) 0 3 0)
+  submitMustFail fixture.subscriberOne do
+    exerciseCmd executed.buyOrderCid Cancel
+
+negativePaths : Script ()
+negativePaths = script do
+  pausedFixture <- setupFixture "paused" (time (date 2026 Apr 21) 0 0 0)
+  _ <- submit pausedFixture.operator do
+    exerciseCmd pausedFixture.pairCid Pause with
+      reason = "manual hold"
+  submitMustFail pausedFixture.subscriberOne do
+    exerciseCmd pausedFixture.darkPoolCid SubmitDarkOrder with
+      subscriber = pausedFixture.subscriberOne
+      orderId = "paused-order"
+      clientOrderId = "paused-order"
+      instrumentId = "CUSIP-DARK-PAUSED"
+      side = Buy
+      quantity = 5.0
+      limitPrice = 99.0
+      expiresAt = Some (time (date 2026 Apr 21) 0 5 0)
+
+  expiryFixture <- setupFixture "expiry" (time (date 2026 Apr 22) 0 0 0)
+  _ <- submitDarkOrder expiryFixture.darkPoolCid expiryFixture.subscriberOne "dark-buy-expiry" "dark-buy-expiry" Buy 10.0 100.0 (Some (time (date 2026 Apr 22) 0 10 0))
+  _ <- submitDarkOrder expiryFixture.darkPoolCid expiryFixture.subscriberTwo "dark-sell-expiry" "dark-sell-expiry" Sell 10.0 99.0 (Some (time (date 2026 Apr 22) 0 10 0))
+  created <- submit expiryFixture.operator do
+    exerciseCmd expiryFixture.darkPoolCid CreateMatchProposal with
+      buyOrderId = "dark-buy-expiry"
+      sellOrderId = "dark-sell-expiry"
+      proposalId = "proposal-expiry"
+      buyLockId = "lock-buy-expiry"
+      sellLockId = "lock-sell-expiry"
+      expiresAt = time (date 2026 Apr 22) 0 1 0
+  submitMustFail expiryFixture.subscriberOne do
+    exerciseCmd created.buyOrderCid Cancel
+  setTime (time (date 2026 Apr 22) 0 2 0)
+  released <- submit expiryFixture.operator do
+    exerciseCmd created.proposalCid ReleaseExpired
+  expiredProposal <- queryContractId expiryFixture.operator released.proposalCid
+  case expiredProposal of
+    Some proposal -> assertEq ProposalExpired proposal.status
+    None -> abort "Expected expired proposal."
+  cancelledCid <- submit expiryFixture.subscriberOne do
+    exerciseCmd released.buyOrderCid Cancel
+  cancelledOrder <- queryContractId expiryFixture.operator cancelledCid
+  case cancelledOrder of
+    Some order -> assertEq DarkCancelled order.status
+    None -> abort "Expected cancelled buy order after lock release."
+
+  blockedFixture <- setupFixture "blocked-match" (time (date 2026 Apr 23) 0 0 0)
+  _ <- submitDarkOrder blockedFixture.darkPoolCid blockedFixture.subscriberOne "dark-buy-blocked" "dark-buy-blocked" Buy 8.0 100.0 (Some (time (date 2026 Apr 23) 0 10 0))
+  _ <- submitDarkOrder blockedFixture.darkPoolCid blockedFixture.subscriberTwo "dark-sell-blocked" "dark-sell-blocked" Sell 8.0 99.0 (Some (time (date 2026 Apr 23) 0 10 0))
+  _ <- submit blockedFixture.operator do
+    exerciseCmd blockedFixture.pairCid Pause with
+      reason = "pause before match"
+  submitMustFail blockedFixture.operator do
+    exerciseCmd blockedFixture.darkPoolCid CreateMatchProposal with
+      buyOrderId = "dark-buy-blocked"
+      sellOrderId = "dark-sell-blocked"
+      proposalId = "proposal-blocked"
+      buyLockId = "lock-buy-blocked"
+      sellLockId = "lock-sell-blocked"
+      expiresAt = time (date 2026 Apr 23) 0 5 0
+
+all : Script ()
+all = script do
+  happyPath
+  negativePaths

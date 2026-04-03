@@ -201,7 +201,7 @@ const renderExecutionTable = (view: SubscriberView): string =>
       id: execution.executionId,
       cells: {
         executionId: renderCode(execution.executionId),
-        quoteId: renderCode(execution.quoteId),
+        quoteId: renderCode(execution.quoteId ?? "n/a"),
         price: escapeHtml(execution.price.toFixed(2)),
         quantity: escapeHtml(String(execution.quantity)),
         acceptedAt: renderCode(execution.acceptedAt)

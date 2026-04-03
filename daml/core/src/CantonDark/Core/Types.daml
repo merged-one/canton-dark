@@ -73,6 +73,40 @@ data QuoteStatus
   | QuoteWithdrawn
   deriving (Eq, Ord, Show)
 
+data DarkOrderStatus
+  = DarkCancelled
+  | DarkExecuted
+  | DarkExpired
+  | DarkLocked
+  | DarkOpen
+  deriving (Eq, Ord, Show)
+
+data OrderLockStatus
+  = LockActive
+  | LockExpired
+  | LockReleased
+  deriving (Eq, Ord, Show)
+
+data LockReleaseReason
+  = ReleasedOnExecute
+  | ReleasedOnExpiry
+  | ReleasedOnReject
+  deriving (Eq, Ord, Show)
+
+data MatchProposalResponse
+  = ResponseAccepted
+  | ResponsePending
+  | ResponseRejected
+  deriving (Eq, Ord, Show)
+
+data MatchProposalStatus
+  = ProposalAccepted
+  | ProposalExecuted
+  | ProposalExpired
+  | ProposalPending
+  | ProposalRejected
+  deriving (Eq, Ord, Show)
+
 data SettlementStatus
   = SettlementAffirmed
   | SettlementFailed
@@ -141,6 +175,10 @@ quoteTieBreakRule : Text
 quoteTieBreakRule =
   "Best price, then larger quantity, then earliest quote creation time, then lexicographic quote id."
 
+darkCrossTieBreakRule : Text
+darkCrossTieBreakRule =
+  "Highest buy price and lowest sell price, then larger quantity, then earliest order creation time, then lexicographic order id."
+
 defaultEntitlements : ParticipantRole -> [Entitlement]
 defaultEntitlements role =
   case role of
@@ -161,6 +199,27 @@ hasGrantEntitlement entitlements revokedAt entitlement =
 
 isActivePauseState : PauseStateData -> Bool
 isActivePauseState pauseState = pauseState.state == PairActive
+
+darkOrderLive : DarkOrderStatus -> Bool
+darkOrderLive darkOrderStatus =
+  case darkOrderStatus of
+    DarkOpen -> True
+    DarkLocked -> True
+    DarkCancelled -> False
+    DarkExecuted -> False
+    DarkExpired -> False
+
+orderLockActive : OrderLockStatus -> Bool
+orderLockActive lockStatus = lockStatus == LockActive
+
+matchProposalLive : MatchProposalStatus -> Bool
+matchProposalLive proposalStatus =
+  case proposalStatus of
+    ProposalPending -> True
+    ProposalAccepted -> True
+    ProposalRejected -> False
+    ProposalExpired -> False
+    ProposalExecuted -> False
 
 canProgressSettlement : SettlementStatus -> SettlementStatus -> Bool
 canProgressSettlement fromStatus toStatus =

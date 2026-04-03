@@ -5,7 +5,10 @@ import type {
   AuditRecord,
   DealerInvitation,
   DealerQuote,
+  DarkOrder,
   ExecutionTicket,
+  MatchProposal,
+  OrderLock,
   PairInstance,
   QuoteRevision,
   QuoteWithdrawal,
@@ -33,16 +36,28 @@ const createTestDependencies = () => {
   const invitations = new Map<string, DealerInvitation>();
   const quoteRevisions = new Map<string, QuoteRevision>();
   const quoteWithdrawals = new Map<string, QuoteWithdrawal>();
+  const darkOrders = new Map<string, DarkOrder>();
+  const orderLocks = new Map<string, OrderLock>();
+  const matchProposals = new Map<string, MatchProposal>();
   const executions = new Map<string, ExecutionTicket>();
   const settlements = new Map<string, SettlementInstruction>();
   const audits: AuditRecord[] = [];
 
   const ledger: LedgerPort = {
+    async getDarkOrder(orderId) {
+      return clone(darkOrders.get(orderId) ?? null);
+    },
     async getExecutionTicket(executionId) {
       return clone(executions.get(executionId) ?? null);
     },
+    async getMatchProposal(proposalId) {
+      return clone(matchProposals.get(proposalId) ?? null);
+    },
     async getPair(pairId) {
       return clone(pairs.get(pairId) ?? null);
+    },
+    async getOrderLock(lockId) {
+      return clone(orderLocks.get(lockId) ?? null);
     },
     async getQuote(quoteId) {
       return clone(quotes.get(quoteId) ?? null);
@@ -56,11 +71,20 @@ const createTestDependencies = () => {
     async listAccessGrants(pairId) {
       return clone(accessGrants.get(pairId) ?? []);
     },
+    async listDarkOrders(pairId) {
+      return clone([...darkOrders.values()].filter((order) => order.pairId === pairId));
+    },
     async listExecutionTickets(pairId) {
       return clone([...executions.values()].filter((execution) => execution.pairId === pairId));
     },
     async listInvitations(pairId) {
       return clone([...invitations.values()].filter((invitation) => invitation.pairId === pairId));
+    },
+    async listMatchProposals(pairId) {
+      return clone([...matchProposals.values()].filter((proposal) => proposal.pairId === pairId));
+    },
+    async listOrderLocks(pairId) {
+      return clone([...orderLocks.values()].filter((lock) => lock.pairId === pairId));
     },
     async listPairs() {
       return clone([...pairs.values()]);
@@ -85,11 +109,20 @@ const createTestDependencies = () => {
     async saveAccessGrant(grant) {
       accessGrants.set(grant.pairId, [...(accessGrants.get(grant.pairId) ?? []), clone(grant)]);
     },
+    async saveDarkOrder(order) {
+      darkOrders.set(order.orderId, clone(order));
+    },
     async saveExecutionTicket(execution) {
       executions.set(execution.executionId, clone(execution));
     },
     async saveInvitation(invitation) {
       invitations.set(invitation.invitationId, clone(invitation));
+    },
+    async saveMatchProposal(proposal) {
+      matchProposals.set(proposal.proposalId, clone(proposal));
+    },
+    async saveOrderLock(lock) {
+      orderLocks.set(lock.lockId, clone(lock));
     },
     async savePair(pair) {
       pairs.set(pair.pairId, clone(pair));
@@ -140,9 +173,12 @@ const createTestDependencies = () => {
     state: {
       accessGrants,
       audits,
+      darkOrders,
       executions,
       invitations,
       ledger,
+      matchProposals,
+      orderLocks,
       pairs,
       quoteRevisions,
       quoteWithdrawals,
@@ -1472,5 +1508,846 @@ describe("createVenueApplication", () => {
     });
 
     expect(rejected.status).toBe("rejected");
+  });
+
+  it("runs the dark-cross lifecycle end to end with subscriber-scoped privacy", async () => {
+    const { app, state, clock } = createTestDependencies();
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      mode: "ATSPair",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      operatorOversightRole: "blinded",
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v3"
+    });
+
+    clock.advanceBy(1_000);
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    clock.advanceBy(1_000);
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber"
+    });
+
+    clock.advanceBy(1_000);
+    const buyOrder = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "client-buy-1",
+      instrumentId: "CUSIP-DARK-1",
+      side: "buy",
+      quantity: 50,
+      limitPrice: 101.5,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    clock.advanceBy(1_000);
+    const sellOrder = await app.submitDarkOrder({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      clientOrderId: "client-sell-1",
+      instrumentId: "CUSIP-DARK-1",
+      side: "sell",
+      quantity: 50,
+      limitPrice: 100.5,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const noExpiryOrder = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "client-buy-no-expiry",
+      instrumentId: "CUSIP-DARK-1",
+      side: "buy",
+      quantity: 10,
+      limitPrice: 99.5
+    });
+
+    const subscriberOneView = await app.getDarkSubscriberState(
+      pair.pairId,
+      "subscriber-1",
+      "subscriber-1"
+    );
+    const subscriberTwoView = await app.getDarkSubscriberState(
+      pair.pairId,
+      "subscriber-2",
+      "subscriber-2"
+    );
+
+    expect(subscriberOneView?.orders.map((order) => order.orderId)).toEqual([
+      buyOrder.orderId,
+      noExpiryOrder.orderId
+    ]);
+    expect(noExpiryOrder).not.toHaveProperty("expiresAt");
+    expect(subscriberTwoView?.orders.map((order) => order.orderId)).toEqual([sellOrder.orderId]);
+    await expect(
+      app.getDarkSubscriberState(pair.pairId, "subscriber-1", "subscriber-2")
+    ).rejects.toThrow(expect.objectContaining({ code: "MISSING_ENTITLEMENT" }));
+
+    clock.advanceBy(1_000);
+    const proposal = await app.generateMatchProposal({
+      actorId: "operator-1",
+      pairId: pair.pairId
+    });
+    clock.advanceBy(1_000);
+    const firstAccepted = await app.acceptMatch({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      proposalId: proposal.proposal.proposalId
+    });
+    clock.advanceBy(1_000);
+    const secondAccepted = await app.acceptMatch({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      proposalId: proposal.proposal.proposalId
+    });
+    clock.advanceBy(1_000);
+    const executed = await app.executeSettlement({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      proposalId: proposal.proposal.proposalId
+    });
+    const replayedExecution = await app.executeSettlement({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      proposalId: proposal.proposal.proposalId
+    });
+    state.orderLocks.set("orphan-lock", {
+      lockId: "orphan-lock",
+      pairId: pair.pairId,
+      orderId: sellOrder.orderId,
+      proposalId: "unknown-proposal",
+      subscriberId: "subscriber-2",
+      lockedAt: "2026-04-02T00:00:00.000Z",
+      lockedBy: "operator-1",
+      lockExpiresAt: "2026-04-02T00:00:30.000Z",
+      updatedAt: "2026-04-02T00:00:00.000Z",
+      status: "expired",
+      releasedAt: "2026-04-02T00:00:30.000Z",
+      releasedBy: "system",
+      releaseReason: "expired"
+    });
+    const postExecutionView = await app.getDarkSubscriberState(
+      pair.pairId,
+      "subscriber-1",
+      "subscriber-1"
+    );
+    const subscriberTwoPostExecutionView = await app.getDarkSubscriberState(
+      pair.pairId,
+      "subscriber-2",
+      "subscriber-2"
+    );
+
+    expect(firstAccepted.status).toBe("pending");
+    expect(secondAccepted.status).toBe("accepted");
+    expect(executed.proposal.status).toBe("executed");
+    expect(replayedExecution.executionTicket.executionId).toBe(
+      executed.executionTicket.executionId
+    );
+    expect(state.matchProposals.get(proposal.proposal.proposalId)?.status).toBe("executed");
+    expect(state.orderLocks.get(proposal.buyLock.lockId)?.status).toBe("released");
+    expect(state.executions.get(executed.executionTicket.executionId)?.executionKind).toBe(
+      "dark_cross"
+    );
+    expect(
+      state.settlements.get(executed.settlementInstruction.instructionId)?.settlementKind
+    ).toBe("dark_cross");
+    expect(postExecutionView?.proposals).toHaveLength(1);
+    expect(postExecutionView?.locks).toHaveLength(2);
+    expect(postExecutionView?.executions).toHaveLength(1);
+    expect(postExecutionView?.settlements).toHaveLength(1);
+    expect(subscriberTwoPostExecutionView?.proposals).toHaveLength(1);
+    expect(subscriberTwoPostExecutionView?.locks.map((lock) => lock.lockId)).toContain(
+      "orphan-lock"
+    );
+    expect(subscriberTwoPostExecutionView?.executions).toHaveLength(1);
+    expect(subscriberTwoPostExecutionView?.settlements).toHaveLength(1);
+
+    state.executions.delete(executed.executionTicket.executionId);
+
+    await expect(
+      app.executeSettlement({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        proposalId: proposal.proposal.proposalId
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "MATCH_PROPOSAL_NOT_ACCEPTED" }));
+  });
+
+  it("prevents conflicting match proposals from locking the same order twice", async () => {
+    const { app, clock } = createTestDependencies();
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      mode: "ATSPair",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v3"
+    });
+
+    clock.advanceBy(1_000);
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber"
+    });
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-3",
+      role: "subscriber"
+    });
+
+    const buyOrder = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "buy-conflict",
+      instrumentId: "CUSIP-DARK-2",
+      side: "buy",
+      quantity: 25,
+      limitPrice: 102,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const firstSellOrder = await app.submitDarkOrder({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      clientOrderId: "sell-conflict-1",
+      instrumentId: "CUSIP-DARK-2",
+      side: "sell",
+      quantity: 25,
+      limitPrice: 100,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const secondSellOrder = await app.submitDarkOrder({
+      actorId: "subscriber-3",
+      pairId: pair.pairId,
+      clientOrderId: "sell-conflict-2",
+      instrumentId: "CUSIP-DARK-2",
+      side: "sell",
+      quantity: 25,
+      limitPrice: 99,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+
+    const results = await Promise.allSettled([
+      app.generateMatchProposal({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        buyOrderId: buyOrder.orderId,
+        sellOrderId: firstSellOrder.orderId
+      }),
+      app.generateMatchProposal({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        buyOrderId: buyOrder.orderId,
+        sellOrderId: secondSellOrder.orderId
+      })
+    ]);
+
+    const [firstResult, secondResult] = results;
+
+    expect(firstResult.status).toBe("fulfilled");
+    expect(secondResult.status).toBe("rejected");
+    if (secondResult.status !== "rejected") {
+      throw new Error("Expected the competing match proposal to be rejected.");
+    }
+    expect(secondResult.reason).toMatchObject({ code: "ORDER_LOCK_ACTIVE" });
+  });
+
+  it("handles proposal expiry races and exposes expired lock release deterministically", async () => {
+    const { app, clock, state } = createTestDependencies();
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      mode: "ATSPair",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v3"
+    });
+
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber"
+    });
+
+    const buyOrder = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "buy-expiry",
+      instrumentId: "CUSIP-DARK-3",
+      side: "buy",
+      quantity: 20,
+      limitPrice: 101,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const sellOrder = await app.submitDarkOrder({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      clientOrderId: "sell-expiry",
+      instrumentId: "CUSIP-DARK-3",
+      side: "sell",
+      quantity: 20,
+      limitPrice: 100,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const proposal = await app.generateMatchProposal({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      buyOrderId: buyOrder.orderId,
+      sellOrderId: sellOrder.orderId,
+      expiresAt: "2026-04-02T00:00:01.000Z"
+    });
+
+    await app.acceptMatch({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      proposalId: proposal.proposal.proposalId
+    });
+
+    clock.set("2026-04-02T00:00:02.000Z");
+
+    await expect(
+      app.acceptMatch({
+        actorId: "subscriber-2",
+        pairId: pair.pairId,
+        proposalId: proposal.proposal.proposalId
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "MATCH_PROPOSAL_NOT_PENDING" }));
+
+    const released = await app.releaseExpiredLock({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      proposalId: proposal.proposal.proposalId
+    });
+
+    expect(released.proposal.status).toBe("expired");
+    expect(released.locks.every((lock) => lock.status === "expired")).toBe(true);
+    expect(state.matchProposals.get(proposal.proposal.proposalId)?.status).toBe("expired");
+  });
+
+  it("treats duplicate dark-order submissions as idempotent and serializes cancel-vs-lock races", async () => {
+    const { app, clock, state } = createTestDependencies();
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      mode: "ATSPair",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v3"
+    });
+
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber"
+    });
+
+    const first = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "dup-order",
+      instrumentId: "CUSIP-DARK-4",
+      side: "buy",
+      quantity: 10,
+      limitPrice: 101,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const duplicate = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "dup-order",
+      instrumentId: "CUSIP-DARK-4",
+      side: "buy",
+      quantity: 10,
+      limitPrice: 101,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+
+    expect(duplicate.orderId).toBe(first.orderId);
+    expect(
+      [...state.darkOrders.values()].filter((order) => order.clientOrderId === "dup-order")
+    ).toHaveLength(1);
+
+    const sellOrder = await app.submitDarkOrder({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      clientOrderId: "race-sell",
+      instrumentId: "CUSIP-DARK-4",
+      side: "sell",
+      quantity: 10,
+      limitPrice: 100,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+
+    const cancelFirst = await Promise.allSettled([
+      app.cancelDarkOrder({
+        actorId: "subscriber-1",
+        pairId: pair.pairId,
+        orderId: first.orderId
+      }),
+      app.generateMatchProposal({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        buyOrderId: first.orderId,
+        sellOrderId: sellOrder.orderId
+      })
+    ]);
+
+    const [cancelledFirst, blockedMatch] = cancelFirst;
+
+    expect(cancelledFirst.status).toBe("fulfilled");
+    expect(blockedMatch.status).toBe("rejected");
+
+    const freshBuy = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "race-buy-2",
+      instrumentId: "CUSIP-DARK-4",
+      side: "buy",
+      quantity: 10,
+      limitPrice: 101,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+
+    const lockFirst = await Promise.allSettled([
+      app.generateMatchProposal({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        buyOrderId: freshBuy.orderId,
+        sellOrderId: sellOrder.orderId
+      }),
+      app.cancelDarkOrder({
+        actorId: "subscriber-1",
+        pairId: pair.pairId,
+        orderId: freshBuy.orderId
+      })
+    ]);
+
+    const [lockedProposal, blockedCancel] = lockFirst;
+
+    expect(lockedProposal.status).toBe("fulfilled");
+    expect(blockedCancel.status).toBe("rejected");
+    if (blockedCancel.status !== "rejected") {
+      throw new Error("Expected the competing cancellation to be rejected.");
+    }
+    expect(blockedCancel.reason).toMatchObject({ code: "DARK_ORDER_LOCKED" });
+
+    clock.advanceBy(1_000);
+  });
+
+  it("returns the existing live match proposal for the same locked order pair", async () => {
+    const { app } = createTestDependencies();
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      mode: "ATSPair",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v3"
+    });
+
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber"
+    });
+
+    const buyOrder = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "existing-buy",
+      instrumentId: "CUSIP-DARK-5",
+      side: "buy",
+      quantity: 10,
+      limitPrice: 101,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const sellOrder = await app.submitDarkOrder({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      clientOrderId: "existing-sell",
+      instrumentId: "CUSIP-DARK-5",
+      side: "sell",
+      quantity: 10,
+      limitPrice: 100,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+
+    const firstProposal = await app.generateMatchProposal({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      buyOrderId: buyOrder.orderId,
+      sellOrderId: sellOrder.orderId
+    });
+    const secondProposal = await app.generateMatchProposal({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      buyOrderId: buyOrder.orderId,
+      sellOrderId: sellOrder.orderId
+    });
+
+    expect(secondProposal.proposal.proposalId).toBe(firstProposal.proposal.proposalId);
+    expect(secondProposal.buyLock.lockId).toBe(firstProposal.buyLock.lockId);
+    expect(secondProposal.sellLock.lockId).toBe(firstProposal.sellLock.lockId);
+  });
+
+  it("auto-selects the best dark-cross candidate, expires dark orders on read, and validates targeted proposal inputs", async () => {
+    const { app, clock, state } = createTestDependencies();
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      mode: "ATSPair",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v3"
+    });
+
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber"
+    });
+
+    const lowerPriorityBuy = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "auto-buy-1",
+      instrumentId: "CUSIP-DARK-8",
+      side: "buy",
+      quantity: 10,
+      limitPrice: 101,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const higherPriorityBuy = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "auto-buy-2",
+      instrumentId: "CUSIP-DARK-8",
+      side: "buy",
+      quantity: 20,
+      limitPrice: 102,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    await app.submitDarkOrder({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      clientOrderId: "auto-sell-1",
+      instrumentId: "CUSIP-DARK-8",
+      side: "sell",
+      quantity: 10,
+      limitPrice: 100,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const matchingSell = await app.submitDarkOrder({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      clientOrderId: "auto-sell-2",
+      instrumentId: "CUSIP-DARK-8",
+      side: "sell",
+      quantity: 20,
+      limitPrice: 100,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+
+    const autoProposal = await app.generateMatchProposal({
+      actorId: "operator-1",
+      pairId: pair.pairId
+    });
+
+    expect(autoProposal.proposal.buyOrderId).toBe(higherPriorityBuy.orderId);
+    expect(autoProposal.proposal.sellOrderId).toBe(matchingSell.orderId);
+    expect(autoProposal.proposal.buyOrderId).not.toBe(lowerPriorityBuy.orderId);
+
+    await expect(
+      app.generateMatchProposal({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        buyOrderId: higherPriorityBuy.orderId
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "NO_MATCH_CANDIDATE" }));
+
+    const expiringOrder = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "expire-on-read",
+      instrumentId: "CUSIP-DARK-9",
+      side: "buy",
+      quantity: 5,
+      limitPrice: 99,
+      expiresAt: "2026-04-02T00:00:01.000Z"
+    });
+
+    clock.set("2026-04-02T00:00:02.000Z");
+
+    const expiredView = await app.getDarkSubscriberState(
+      pair.pairId,
+      "subscriber-1",
+      "subscriber-1"
+    );
+
+    expect(
+      expiredView?.orders.find((order) => order.orderId === expiringOrder.orderId)?.status
+    ).toBe("expired");
+    expect(state.darkOrders.get(expiringOrder.orderId)?.status).toBe("expired");
+  });
+
+  it("rejects live match proposals and refuses to release still-active locks", async () => {
+    const { app } = createTestDependencies();
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      mode: "ATSPair",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v3"
+    });
+
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber"
+    });
+
+    const buyOrder = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "reject-buy",
+      instrumentId: "CUSIP-DARK-6",
+      side: "buy",
+      quantity: 15,
+      limitPrice: 101,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const sellOrder = await app.submitDarkOrder({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      clientOrderId: "reject-sell",
+      instrumentId: "CUSIP-DARK-6",
+      side: "sell",
+      quantity: 15,
+      limitPrice: 100,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const proposal = await app.generateMatchProposal({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      buyOrderId: buyOrder.orderId,
+      sellOrderId: sellOrder.orderId
+    });
+
+    await expect(
+      app.releaseExpiredLock({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        proposalId: proposal.proposal.proposalId
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "ORDER_LOCK_ACTIVE" }));
+
+    const rejected = await app.rejectMatch({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      proposalId: proposal.proposal.proposalId,
+      reason: "manual"
+    });
+    const reproposed = await app.generateMatchProposal({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      buyOrderId: buyOrder.orderId,
+      sellOrderId: sellOrder.orderId
+    });
+    const rejectedWithoutReason = await app.rejectMatch({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      proposalId: reproposed.proposal.proposalId
+    });
+
+    expect(rejected.proposal.status).toBe("rejected");
+    expect(rejected.buyLock.status).toBe("released");
+    expect(rejected.sellLock.status).toBe("released");
+    expect(rejected.proposal.rejectionReason).toBe("manual");
+    expect(reproposed.proposal.proposalId).not.toBe(proposal.proposal.proposalId);
+    expect(rejectedWithoutReason.proposal).not.toHaveProperty("rejectionReason");
+  });
+
+  it("surfaces missing proposal and lock references in dark-cross commands", async () => {
+    const { app, state } = createTestDependencies();
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      mode: "ATSPair",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v3"
+    });
+
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-2",
+      role: "subscriber"
+    });
+
+    const buyOrder = await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "missing-buy",
+      instrumentId: "CUSIP-DARK-10",
+      side: "buy",
+      quantity: 10,
+      limitPrice: 101,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const sellOrder = await app.submitDarkOrder({
+      actorId: "subscriber-2",
+      pairId: pair.pairId,
+      clientOrderId: "missing-sell",
+      instrumentId: "CUSIP-DARK-10",
+      side: "sell",
+      quantity: 10,
+      limitPrice: 100,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+    const proposal = await app.generateMatchProposal({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      buyOrderId: buyOrder.orderId,
+      sellOrderId: sellOrder.orderId,
+      expiresAt: "2026-04-02T00:00:01.000Z"
+    });
+
+    await expect(
+      app.acceptMatch({
+        actorId: "subscriber-1",
+        pairId: pair.pairId,
+        proposalId: "missing-proposal"
+      })
+    ).rejects.toThrow("Match proposal missing-proposal was not found.");
+
+    await expect(
+      app.cancelDarkOrder({
+        actorId: "subscriber-1",
+        pairId: pair.pairId,
+        orderId: "missing-order"
+      })
+    ).rejects.toThrow("Dark order missing-order was not found.");
+
+    state.orderLocks.delete(proposal.buyLock.lockId);
+
+    await expect(
+      app.releaseExpiredLock({
+        actorId: "operator-1",
+        pairId: pair.pairId,
+        proposalId: proposal.proposal.proposalId
+      })
+    ).rejects.toThrow(`Order lock ${proposal.buyLock.lockId} was not found.`);
+  });
+
+  it("reports when no compatible dark-cross candidate exists", async () => {
+    const { app } = createTestDependencies();
+    const pair = await app.createPair({
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      mode: "ATSPair",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      jurisdiction: "US",
+      rulebookSummary: "initial",
+      rulebookVersion: "v3"
+    });
+
+    await app.grantAccess({
+      actorId: "operator-1",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber"
+    });
+
+    await app.submitDarkOrder({
+      actorId: "subscriber-1",
+      pairId: pair.pairId,
+      clientOrderId: "no-candidate-buy",
+      instrumentId: "CUSIP-DARK-7",
+      side: "buy",
+      quantity: 12,
+      limitPrice: 100,
+      expiresAt: "2026-04-02T00:10:00.000Z"
+    });
+
+    await expect(
+      app.generateMatchProposal({
+        actorId: "operator-1",
+        pairId: pair.pairId
+      })
+    ).rejects.toThrow(expect.objectContaining({ code: "NO_MATCH_CANDIDATE" }));
+  });
+
+  it("returns null dark subscriber state for missing pairs", async () => {
+    const { app } = createTestDependencies();
+
+    await expect(
+      app.getDarkSubscriberState("missing-pair", "subscriber-1", "subscriber-1")
+    ).resolves.toBeNull();
   });
 });
