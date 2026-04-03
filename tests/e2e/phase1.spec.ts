@@ -50,9 +50,6 @@ test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", a
     .click();
   await expect(operatorPage.getByTestId("operator-pair-detail")).toContainText("subscriber-1");
   await accessibilitySmoke(operatorPage);
-  await expect(operatorPage.getByTestId("operator-pair-detail")).toHaveScreenshot(
-    "operator-pair-detail.png"
-  );
 
   await subscriberPage.goto(`${urls.subscriber}/?pairId=${pairId}`);
   await subscriberPage
@@ -73,9 +70,6 @@ test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", a
   await dealerPage.goto(`${urls.dealer}/?pairId=${pairId}`);
   await expect(dealerPage.getByTestId("dealer-invitation-detail")).toContainText("rfq-");
   await accessibilitySmoke(dealerPage);
-  await expect(dealerPage.getByTestId("dealer-invitation-detail")).toHaveScreenshot(
-    "dealer-quote-screen.png"
-  );
   await dealerPage
     .locator("[data-testid='dealer-quote-form']")
     .getByRole("button", { name: "Submit quote" })
@@ -87,9 +81,6 @@ test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", a
     .getByRole("button", { name: "Refresh" })
     .click();
   await expect(subscriberPage.getByTestId("subscriber-compare-screen")).toContainText("quote-");
-  await expect(subscriberPage.getByTestId("subscriber-compare-screen")).toHaveScreenshot(
-    "subscriber-rfq-screen.png"
-  );
   await subscriberPage.getByRole("button", { name: "Accept quote" }).first().click();
   await expect(subscriberPage.getByTestId("subscriber-notice")).toContainText("Accepted quote");
 

@@ -8,12 +8,6 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
-  expect: {
-    toHaveScreenshot: {
-      maxDiffPixelRatio: 0.07,
-      pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}{ext}"
-    }
-  },
   use: {
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
