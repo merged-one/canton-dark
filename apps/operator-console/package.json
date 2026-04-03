@@ -1,0 +1,16 @@
+{
+  "name": "@canton-dark/operator-console",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "lint": "eslint src vite.config.ts vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:unit": "VITEST_MODE=unit vitest run --coverage --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@canton-dark/api-contracts": "workspace:*",
+    "@canton-dark/ui-sdk": "workspace:*"
+  }
+}

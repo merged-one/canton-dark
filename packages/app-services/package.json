@@ -1,0 +1,20 @@
+{
+  "name": "@canton-dark/app-services",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint src vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:unit": "VITEST_MODE=unit vitest run --coverage --config vitest.config.ts",
+    "test:contract": "VITEST_MODE=contract vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@canton-dark/api-contracts": "workspace:*",
+    "@canton-dark/domain-core": "workspace:*",
+    "@canton-dark/query-models": "workspace:*"
+  }
+}

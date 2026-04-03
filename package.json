@@ -1,0 +1,39 @@
+{
+  "name": "canton-dark",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "lint": "turbo run lint && eslint tests playwright.config.ts vitest.shared.ts && prettier --check .",
+    "format": "prettier --write .",
+    "typecheck": "turbo run typecheck",
+    "test": "pnpm test:unit && pnpm test:property && pnpm test:contract && pnpm test:e2e && pnpm coverage:aggregate",
+    "test:unit": "turbo run test:unit --concurrency=100%",
+    "test:property": "FC_SEED=${FC_SEED:-424242} turbo run test:property --concurrency=1",
+    "test:property:replay": "node scripts/replay-property.mjs",
+    "test:contract": "turbo run test:contract --concurrency=1",
+    "test:e2e": "playwright test",
+    "coverage:aggregate": "node scripts/verify-coverage.mjs",
+    "ci:verify": "pnpm lint && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.59.1",
+    "@types/node": "25.5.0",
+    "@vitest/coverage-v8": "4.1.2",
+    "eslint": "10.1.0",
+    "fast-check": "4.6.0",
+    "globals": "17.4.0",
+    "jsdom": "29.0.1",
+    "prettier": "3.8.1",
+    "tsx": "4.21.0",
+    "turbo": "2.9.3",
+    "typescript": "6.0.2",
+    "typescript-eslint": "8.58.0",
+    "vite": "8.0.3",
+    "vitest": "4.1.2"
+  }
+}

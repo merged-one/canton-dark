@@ -1,0 +1,18 @@
+{
+  "name": "@canton-dark/venue-api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.wiring.ts",
+    "lint": "eslint src vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:unit": "VITEST_MODE=unit vitest run --coverage --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@canton-dark/adapters-memory": "workspace:*",
+    "@canton-dark/api-contracts": "workspace:*",
+    "@canton-dark/app-services": "workspace:*",
+    "@canton-dark/domain-core": "workspace:*"
+  }
+}

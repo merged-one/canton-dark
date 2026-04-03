@@ -1,0 +1,6 @@
+# Repo-local Codex defaults for Canton Dark.
+# Durable architectural rules live in AGENTS.md and the ADR set.
+personality = "pragmatic"
+model_reasoning_effort = "medium"
+model_verbosity = "low"
+plan_mode_reasoning_effort = "high"

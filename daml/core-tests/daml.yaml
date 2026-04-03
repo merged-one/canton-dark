@@ -1,0 +1,8 @@
+sdk-version: 0.0.0
+name: canton-dark-core-tests
+version: 0.0.1
+source: .
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - ../core/.daml/dist/canton-dark-core-0.0.1.dar

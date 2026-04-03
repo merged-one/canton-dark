@@ -1,0 +1,12 @@
+{
+  "name": "@canton-dark/api-contracts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@canton-dark/query-models": "workspace:*"
+  }
+}
