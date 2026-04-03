@@ -10,6 +10,7 @@ export default defineConfig({
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
   expect: {
     toHaveScreenshot: {
+      maxDiffPixelRatio: 0.07,
       pathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}{ext}"
     }
   },

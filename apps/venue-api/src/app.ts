@@ -20,7 +20,6 @@ import {
   type DemoStatusResponse,
   type HealthResponse
 } from "@canton-dark/api-contracts";
-import { DomainError } from "@canton-dark/domain-core";
 import {
   phase1DemoDefaults,
   phase2DemoDefaults,
@@ -71,6 +70,11 @@ const getActorId = (request: ApiRequest, url: URL): string => {
   return actorId;
 };
 
+const isDomainErrorLike = (error: unknown): error is { code: string; message: string } =>
+  error instanceof Error &&
+  "code" in error &&
+  typeof (error as { code: unknown }).code === "string";
+
 const handleError = (error: unknown): ApiReply => {
   if (error instanceof ContractValidationError) {
     return createReply(400, {
@@ -79,7 +83,7 @@ const handleError = (error: unknown): ApiReply => {
     });
   }
 
-  if (error instanceof DomainError) {
+  if (isDomainErrorLike(error)) {
     return createReply(error.code === "MISSING_ENTITLEMENT" ? 403 : 409, {
       code: error.code,
       message: error.message
