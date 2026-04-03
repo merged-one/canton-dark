@@ -1,17 +1,23 @@
 import type {
   AuditTrailView,
+  DealerInvitationHistoryView,
   DealerWorkbenchView,
+  OperatorOversightView,
   OperatorView,
+  QuoteComparisonView,
   SubscriberView,
   VenueHealthReadModel
 } from "@canton-dark/query-models";
 import type { Entitlement } from "@canton-dark/domain-core";
 
 export type CreatePairRequest = {
-  dealerId: string;
+  dealerId?: string;
+  dealerIds?: readonly string[];
+  inviteRevisionPolicy?: "before_first_response" | "locked";
   jurisdiction: string;
-  mode: "SingleDealerPair";
+  mode: "ATSPair" | "SingleDealerPair";
   operatorId: string;
+  operatorOversightRole?: "blinded" | "full";
   pairId?: string;
   rulebookSummary: string;
   rulebookVersion: string;
@@ -31,7 +37,12 @@ export type PausePairRequest = {
 export type OpenRfqRequest = {
   instrumentId: string;
   quantity: number;
+  responseWindowClosesAt?: string;
   side: "buy" | "sell";
+};
+
+export type InviteDealersRequest = {
+  dealerIds: readonly string[];
 };
 
 export type RejectRfqRequest = {
@@ -42,6 +53,14 @@ export type SubmitQuoteRequest = {
   expiresAt: string;
   price: number;
   quantity: number;
+};
+
+export type WithdrawQuoteRequest = {
+  reason?: string;
+};
+
+export type RejectAllQuotesRequest = {
+  reason?: string;
 };
 
 export type MarkSettlementProgressionRequest = {
@@ -80,6 +99,7 @@ export type OpenApiSchema = {
   description?: string;
   enum?: readonly string[];
   items?: OpenApiSchema;
+  nullable?: boolean;
   properties?: Record<string, OpenApiSchema>;
   required?: readonly string[];
   type?: "array" | "boolean" | "number" | "object" | "string";
@@ -176,6 +196,16 @@ const optionalSchema = <T>(inner: Schema<T>): Schema<T | undefined> => ({
   }
 });
 
+const nullableSchema = <T>(inner: Schema<T>): Schema<T | null> => ({
+  openapi: {
+    ...inner.openapi,
+    nullable: true
+  },
+  parse(value, path = "$") {
+    return value === null ? null : inner.parse(value, path);
+  }
+});
+
 const objectSchema = <T extends Record<string, unknown>>(
   shape: Record<string, Schema<unknown>>
 ): Schema<T> => ({
@@ -218,7 +248,7 @@ const objectSchema = <T extends Record<string, unknown>>(
 
 const pairSummaryViewSchema = objectSchema<OperatorView["pair"]>({
   pairId: stringSchema(),
-  mode: enumSchema(["SingleDealerPair"]),
+  mode: enumSchema(["ATSPair", "SingleDealerPair"]),
   operatorId: stringSchema(),
   dealerId: stringSchema(),
   paused: booleanSchema(),
@@ -259,7 +289,7 @@ const quoteViewSchema = objectSchema<OperatorView["quotes"][number]>({
   price: numberSchema(),
   quantity: numberSchema(),
   expiresAt: stringSchema(),
-  status: enumSchema(["accepted", "expired", "open"]),
+  status: enumSchema(["accepted", "expired", "open", "stale", "withdrawn"]),
   createdAt: stringSchema()
 });
 
@@ -285,13 +315,87 @@ const settlementViewSchema = objectSchema<OperatorView["settlements"][number]>({
   updatedAt: stringSchema()
 });
 
+const invitationViewSchema = objectSchema<DealerInvitationHistoryView["invitations"][number]>({
+  invitationId: stringSchema(),
+  rfqId: stringSchema(),
+  dealerId: stringSchema(),
+  subscriberId: stringSchema(),
+  invitationVersion: numberSchema(),
+  invitedAt: stringSchema(),
+  invitedBy: stringSchema(),
+  responseWindowClosesAt: stringSchema(),
+  status: enumSchema(["expired", "open", "responded", "withdrawn"]),
+  respondedAt: optionalSchema(stringSchema()),
+  withdrawnAt: optionalSchema(stringSchema()),
+  withdrawnBy: optionalSchema(stringSchema()),
+  withdrawalReason: optionalSchema(stringSchema())
+});
+
+const quoteRevisionViewSchema = objectSchema<DealerInvitationHistoryView["revisions"][number]>({
+  revisionId: stringSchema(),
+  pairId: stringSchema(),
+  rfqId: stringSchema(),
+  dealerId: stringSchema(),
+  subscriberId: stringSchema(),
+  previousQuoteId: stringSchema(),
+  nextQuoteId: stringSchema(),
+  revisedAt: stringSchema(),
+  revisedBy: stringSchema()
+});
+
+const quoteWithdrawalViewSchema = objectSchema<DealerInvitationHistoryView["withdrawals"][number]>({
+  withdrawalId: stringSchema(),
+  pairId: stringSchema(),
+  rfqId: stringSchema(),
+  quoteId: stringSchema(),
+  dealerId: stringSchema(),
+  subscriberId: stringSchema(),
+  withdrawnAt: stringSchema(),
+  withdrawnBy: stringSchema(),
+  reason: optionalSchema(stringSchema())
+});
+
+const quoteComparisonItemSchema = objectSchema<QuoteComparisonView["quotes"][number]>({
+  quoteId: stringSchema(),
+  rfqId: stringSchema(),
+  dealerId: stringSchema(),
+  price: numberSchema(),
+  quantity: numberSchema(),
+  expiresAt: stringSchema(),
+  status: enumSchema(["accepted", "expired", "open", "stale", "withdrawn"]),
+  createdAt: stringSchema(),
+  comparable: booleanSchema(),
+  rank: optionalSchema(numberSchema())
+});
+
+const quoteComparisonViewSchema = objectSchema<QuoteComparisonView>({
+  pairId: stringSchema(),
+  rfqId: stringSchema(),
+  subscriberId: stringSchema(),
+  side: enumSchema(["buy", "sell"]),
+  tieBreakRule: stringSchema(),
+  quotes: arraySchema(quoteComparisonItemSchema)
+});
+
+const operatorOversightQuoteSchema = objectSchema<OperatorOversightView["quotes"][number]>({
+  quoteId: stringSchema(),
+  rfqId: stringSchema(),
+  dealerId: stringSchema(),
+  subscriberId: stringSchema(),
+  createdAt: stringSchema(),
+  expiresAt: stringSchema(),
+  status: enumSchema(["accepted", "expired", "open", "stale", "withdrawn"]),
+  price: nullableSchema(numberSchema()),
+  quantity: nullableSchema(numberSchema())
+});
+
 const venueHealthSchema = objectSchema<VenueHealthReadModel>({
   title: stringSchema(),
   status: enumSchema(["healthy", "paused", "rejected"]),
   detail: stringSchema(),
   summary: objectSchema<VenueHealthReadModel["summary"]>({
     pairId: stringSchema(),
-    mode: enumSchema(["SingleDealerPair"]),
+    mode: enumSchema(["ATSPair", "SingleDealerPair"]),
     operatorId: stringSchema(),
     dealers: arraySchema(stringSchema()),
     paused: booleanSchema(),
@@ -332,6 +436,36 @@ const dealerWorkbenchViewSchema = objectSchema<DealerWorkbenchView>({
   executions: arraySchema(executionViewSchema)
 });
 
+const dealerInvitationHistoryViewSchema = objectSchema<DealerInvitationHistoryView>({
+  pair: pairSummaryViewSchema,
+  dealerId: stringSchema(),
+  invitations: arraySchema(invitationViewSchema),
+  quotes: arraySchema(quoteViewSchema),
+  revisions: arraySchema(quoteRevisionViewSchema),
+  withdrawals: arraySchema(quoteWithdrawalViewSchema)
+});
+
+const operatorOversightViewSchema = objectSchema<OperatorOversightView>({
+  pair: pairSummaryViewSchema,
+  oversightRole: enumSchema(["blinded", "full"]),
+  rfqs: arraySchema(rfqViewSchema),
+  invitations: arraySchema(invitationViewSchema),
+  quotes: arraySchema(operatorOversightQuoteSchema),
+  quoteLadders: arraySchema(quoteComparisonViewSchema),
+  revisions: arraySchema(quoteRevisionViewSchema),
+  withdrawals: arraySchema(quoteWithdrawalViewSchema),
+  audits: arraySchema(
+    objectSchema<OperatorOversightView["audits"][number]>({
+      action: stringSchema(),
+      actorId: stringSchema(),
+      at: stringSchema(),
+      detail: stringSchema(),
+      entityId: optionalSchema(stringSchema()),
+      pairId: stringSchema()
+    })
+  )
+});
+
 const auditTrailViewSchema = objectSchema<AuditTrailView>({
   pairId: stringSchema(),
   entries: arraySchema(
@@ -346,15 +480,38 @@ const auditTrailViewSchema = objectSchema<AuditTrailView>({
   )
 });
 
-export const createPairRequestSchema = objectSchema<CreatePairRequest>({
-  mode: enumSchema(["SingleDealerPair"]),
+const createPairRequestSchemaBase = objectSchema<CreatePairRequest>({
+  mode: enumSchema(["ATSPair", "SingleDealerPair"]),
   operatorId: stringSchema(),
-  dealerId: stringSchema(),
+  dealerId: optionalSchema(stringSchema()),
+  dealerIds: optionalSchema(arraySchema(stringSchema())),
+  operatorOversightRole: optionalSchema(enumSchema(["blinded", "full"])),
+  inviteRevisionPolicy: optionalSchema(enumSchema(["before_first_response", "locked"])),
   pairId: optionalSchema(stringSchema()),
   jurisdiction: stringSchema(),
   rulebookVersion: stringSchema(),
   rulebookSummary: stringSchema()
 });
+
+export const createPairRequestSchema: Schema<CreatePairRequest> = {
+  ...createPairRequestSchemaBase,
+  parse(value, path = "$") {
+    const parsed = createPairRequestSchemaBase.parse(value, path);
+
+    if (parsed.mode === "SingleDealerPair" && parsed.dealerId === undefined) {
+      throw new ContractValidationError(`${path}.dealerId`, "is required");
+    }
+
+    if (
+      parsed.mode === "ATSPair" &&
+      (parsed.dealerIds === undefined || parsed.dealerIds.length < 2)
+    ) {
+      throw new ContractValidationError(`${path}.dealerIds`, "must include at least two dealers");
+    }
+
+    return parsed;
+  }
+};
 
 export const grantAccessRequestSchema = objectSchema<GrantAccessRequest>({
   subjectId: stringSchema(),
@@ -370,7 +527,12 @@ export const pausePairRequestSchema = objectSchema<PausePairRequest>({
 export const openRfqRequestSchema = objectSchema<OpenRfqRequest>({
   instrumentId: stringSchema(),
   side: enumSchema(["buy", "sell"]),
-  quantity: numberSchema()
+  quantity: numberSchema(),
+  responseWindowClosesAt: optionalSchema(stringSchema())
+});
+
+export const inviteDealersRequestSchema = objectSchema<InviteDealersRequest>({
+  dealerIds: arraySchema(stringSchema())
 });
 
 export const rejectRfqRequestSchema = objectSchema<RejectRfqRequest>({
@@ -381,6 +543,14 @@ export const submitQuoteRequestSchema = objectSchema<SubmitQuoteRequest>({
   price: numberSchema(),
   quantity: numberSchema(),
   expiresAt: stringSchema()
+});
+
+export const withdrawQuoteRequestSchema = objectSchema<WithdrawQuoteRequest>({
+  reason: optionalSchema(stringSchema())
+});
+
+export const rejectAllQuotesRequestSchema = objectSchema<RejectAllQuotesRequest>({
+  reason: optionalSchema(stringSchema())
 });
 
 export const markSettlementProgressionRequestSchema =
@@ -427,6 +597,15 @@ export const parseSubscriberView = (value: unknown): SubscriberView =>
 export const parseDealerWorkbenchView = (value: unknown): DealerWorkbenchView =>
   dealerWorkbenchViewSchema.parse(value);
 
+export const parseDealerInvitationHistoryView = (value: unknown): DealerInvitationHistoryView =>
+  dealerInvitationHistoryViewSchema.parse(value);
+
+export const parseQuoteComparisonView = (value: unknown): QuoteComparisonView =>
+  quoteComparisonViewSchema.parse(value);
+
+export const parseOperatorOversightView = (value: unknown): OperatorOversightView =>
+  operatorOversightViewSchema.parse(value);
+
 export const parseAuditTrailView = (value: unknown): AuditTrailView =>
   auditTrailViewSchema.parse(value);
 
@@ -444,12 +623,18 @@ export const contractSchemas = {
   GrantAccessRequest: grantAccessRequestSchema,
   PausePairRequest: pausePairRequestSchema,
   OpenRfqRequest: openRfqRequestSchema,
+  InviteDealersRequest: inviteDealersRequestSchema,
   RejectRfqRequest: rejectRfqRequestSchema,
   SubmitQuoteRequest: submitQuoteRequestSchema,
+  WithdrawQuoteRequest: withdrawQuoteRequestSchema,
+  RejectAllQuotesRequest: rejectAllQuotesRequestSchema,
   MarkSettlementProgressionRequest: markSettlementProgressionRequestSchema,
   OperatorView: operatorViewSchema,
   SubscriberView: subscriberViewSchema,
   DealerWorkbenchView: dealerWorkbenchViewSchema,
+  DealerInvitationHistoryView: dealerInvitationHistoryViewSchema,
+  QuoteComparisonView: quoteComparisonViewSchema,
+  OperatorOversightView: operatorOversightViewSchema,
   AuditTrailView: auditTrailViewSchema,
   VenueHealthReadModel: venueHealthSchema,
   HealthResponse: healthResponseSchema,
@@ -531,6 +716,30 @@ export const generateOpenApiDocument = () => ({
         }
       }
     },
+    "/pairs/{pairId}/rfqs/{rfqId}/invite-dealers": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("InviteDealersRequest")
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/rfqs/{rfqId}/revise-invite-set": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("InviteDealersRequest")
+            }
+          }
+        }
+      }
+    },
     "/pairs/{pairId}/rfqs/{rfqId}/reject": {
       post: {
         requestBody: {
@@ -564,11 +773,47 @@ export const generateOpenApiDocument = () => ({
         }
       }
     },
+    "/pairs/{pairId}/quotes/{quoteId}/revise": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("SubmitQuoteRequest")
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/quotes/{quoteId}/withdraw": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("WithdrawQuoteRequest")
+            }
+          }
+        }
+      }
+    },
     "/pairs/{pairId}/quotes/{quoteId}/accept": {
       post: {
         responses: {
           "200": {
             description: "Quote accepted"
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/rfqs/{rfqId}/reject-all": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("RejectAllQuotesRequest")
+            }
           }
         }
       }
@@ -621,6 +866,48 @@ export const generateOpenApiDocument = () => ({
             content: {
               "application/json": {
                 schema: ref("DealerWorkbenchView")
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/views/operator-oversight": {
+      get: {
+        responses: {
+          "200": {
+            description: "Operator oversight view",
+            content: {
+              "application/json": {
+                schema: ref("OperatorOversightView")
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/rfqs/{rfqId}/quote-ladder": {
+      get: {
+        responses: {
+          "200": {
+            description: "Subscriber quote ladder",
+            content: {
+              "application/json": {
+                schema: ref("QuoteComparisonView")
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/dealers/{dealerId}/history": {
+      get: {
+        responses: {
+          "200": {
+            description: "Dealer invitation and quote history",
+            content: {
+              "application/json": {
+                schema: ref("DealerInvitationHistoryView")
               }
             }
           }

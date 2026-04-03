@@ -1,0 +1,8 @@
+sdk-version: 2.9.0
+name: canton-dark-phase2-ats-rfq
+version: 0.0.1
+source: src
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - ../core/.daml/dist/canton-dark-daml-core-0.0.1.dar

@@ -2,16 +2,20 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import {
+  compareQuotePriority,
   acceptDealerQuote,
   createAccessGrant,
+  createDealerInvitations,
   createDealerQuote,
   createPairInstance,
   createRfqSession,
   expireDealerQuote,
+  rankComparableQuotes,
   markRfqQuoteExpired,
   markRfqQuoted,
   resolveEntitlements,
-  revokeAccessGrant
+  revokeAccessGrant,
+  synchronizeRfqLifecycle
 } from "./index";
 
 const createdAt = "2026-04-02T00:00:00.000Z";
@@ -187,6 +191,237 @@ describe("phase 1 domain-core properties", () => {
         expect(expiredRfq.status).toBe("quote_expired");
       }),
       createDeterministicPropertyConfig({ numRuns: 15 })
+    );
+  });
+
+  it("invite sets normalize to unique bound dealers before the first response", () => {
+    const pair = createPairInstance({
+      pairId: "pair-ats-1",
+      mode: "ATSPair",
+      operatorId: "operator-1",
+      dealerIds: ["dealer-alpha", "dealer-beta", "dealer-gamma"],
+      operatorOversightRole: "full",
+      createdAt,
+      operatorApproval: {
+        status: "approved",
+        approvedAt: createdAt,
+        approvedBy: "operator-1"
+      },
+      regulatoryAttestation: {
+        status: "attested",
+        attestedAt: createdAt,
+        attestedBy: "auditor-1",
+        jurisdiction: "US"
+      },
+      rulebookRelease: {
+        releaseId: "rulebook-1",
+        version: "v1",
+        effectiveAt: createdAt,
+        publishedBy: "operator-1",
+        summary: "initial"
+      }
+    });
+    const subscriberGrant = createAccessGrant({
+      grantId: "grant-subscriber",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber",
+      grantedAt: createdAt,
+      grantedBy: "operator-1"
+    });
+    const dealerGrants = pair.dealerIds.map((dealerId, index) =>
+      createAccessGrant({
+        grantId: `grant-dealer-${index}`,
+        pairId: pair.pairId,
+        subjectId: dealerId,
+        role: "dealer",
+        grantedAt: createdAt,
+        grantedBy: "operator-1"
+      })
+    );
+
+    fc.assert(
+      fc.property(
+        fc.subarray(["dealer-alpha", "dealer-beta", "dealer-gamma"] as const, {
+          minLength: 1,
+          maxLength: 3
+        }),
+        (requestedDealers) => {
+          const rfq = createRfqSession({
+            rfqId: "rfq-ats-1",
+            pair,
+            accessGrants: [subscriberGrant],
+            subscriberId: "subscriber-1",
+            instrumentId: "CUSIP-ATS-1",
+            side: "buy",
+            quantity: 10,
+            createdAt,
+            responseWindowClosesAt: "2026-04-02T00:10:00.000Z"
+          });
+          const duplicated = requestedDealers.flatMap((dealerId) => [dealerId, dealerId]);
+          const invited = createDealerInvitations({
+            pair,
+            rfq,
+            accessGrants: dealerGrants,
+            dealerIds: duplicated,
+            invitedBy: "subscriber-1",
+            invitations: [],
+            createdAt
+          });
+
+          expect(new Set(invited.rfq.invitedDealerIds ?? [])).toEqual(new Set(requestedDealers));
+          expect(invited.invitations.map((invitation) => invitation.dealerId).sort()).toEqual(
+            [...requestedDealers].sort()
+          );
+        }
+      ),
+      createDeterministicPropertyConfig({ numRuns: 24 })
+    );
+  });
+
+  it("quote ranking is deterministic for both buy and sell ladders", () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom<"buy" | "sell">("buy", "sell"),
+        fc.array(
+          fc.record({
+            quoteId: fc
+              .string({ minLength: 1, maxLength: 8 })
+              .filter((value) => !value.includes(" ")),
+            price: fc.integer({ min: 90, max: 110 }),
+            quantity: fc.integer({ min: 1, max: 50 }),
+            secondOffset: fc.integer({ min: 0, max: 10 })
+          }),
+          { minLength: 2, maxLength: 8 }
+        ),
+        (side, items) => {
+          const quotes = items.map((item, index) => ({
+            quoteId: `${item.quoteId}-${index}`,
+            pairId: "pair-1",
+            rfqId: "rfq-1",
+            dealerId: `dealer-${index}`,
+            subscriberId: "subscriber-1",
+            price: item.price,
+            quantity: item.quantity,
+            createdAt: new Date(Date.parse(createdAt) + item.secondOffset * 1_000).toISOString(),
+            expiresAt: "2026-04-02T00:05:00.000Z",
+            updatedAt: createdAt,
+            status: "open" as const
+          }));
+          const ranked = rankComparableQuotes(side, quotes);
+
+          expect(ranked.map((entry) => entry.quote.quoteId)).toEqual(
+            rankComparableQuotes(side, quotes).map((entry) => entry.quote.quoteId)
+          );
+
+          for (let index = 0; index < ranked.length - 1; index += 1) {
+            const current = ranked[index];
+            const next = ranked[index + 1];
+
+            if (current === undefined || next === undefined) {
+              throw new Error("Expected adjacent ranked quotes.");
+            }
+
+            expect(compareQuotePriority(side, current.quote, next.quote)).toBeLessThanOrEqual(0);
+          }
+        }
+      ),
+      createDeterministicPropertyConfig({ numRuns: 30 })
+    );
+  });
+
+  it("response windows keep RFQs open until the configured expiry boundary", () => {
+    const pair = createPairInstance({
+      pairId: "pair-ats-expiry",
+      mode: "ATSPair",
+      operatorId: "operator-1",
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      operatorOversightRole: "full",
+      createdAt,
+      operatorApproval: {
+        status: "approved",
+        approvedAt: createdAt,
+        approvedBy: "operator-1"
+      },
+      regulatoryAttestation: {
+        status: "attested",
+        attestedAt: createdAt,
+        attestedBy: "auditor-1",
+        jurisdiction: "US"
+      },
+      rulebookRelease: {
+        releaseId: "rulebook-1",
+        version: "v1",
+        effectiveAt: createdAt,
+        publishedBy: "operator-1",
+        summary: "initial"
+      }
+    });
+    const subscriberGrant = createAccessGrant({
+      grantId: "grant-subscriber-expiry",
+      pairId: pair.pairId,
+      subjectId: "subscriber-1",
+      role: "subscriber",
+      grantedAt: createdAt,
+      grantedBy: "operator-1"
+    });
+    const rfq = createRfqSession({
+      rfqId: "rfq-ats-expiry",
+      pair,
+      accessGrants: [subscriberGrant],
+      subscriberId: "subscriber-1",
+      instrumentId: "CUSIP-EXPIRY-ATS",
+      side: "buy",
+      quantity: 10,
+      createdAt,
+      responseWindowClosesAt: "2026-04-02T00:10:00.000Z"
+    });
+    const invited = createDealerInvitations({
+      pair,
+      rfq,
+      accessGrants: pair.dealerIds.map((dealerId, index) =>
+        createAccessGrant({
+          grantId: `grant-${dealerId}-${index}`,
+          pairId: pair.pairId,
+          subjectId: dealerId,
+          role: "dealer",
+          grantedAt: createdAt,
+          grantedBy: "operator-1"
+        })
+      ),
+      dealerIds: ["dealer-alpha", "dealer-beta"],
+      invitedBy: "subscriber-1",
+      invitations: [],
+      createdAt
+    });
+
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 599 }), (secondsBeforeClose) => {
+        const beforeCloseAt = new Date(
+          Date.parse("2026-04-02T00:10:00.000Z") - secondsBeforeClose * 1_000
+        ).toISOString();
+
+        expect(
+          synchronizeRfqLifecycle({
+            pair,
+            rfq: invited.rfq,
+            invitations: invited.invitations,
+            quotes: [],
+            observedAt: beforeCloseAt
+          }).rfq.status
+        ).toBe("open");
+
+        expect(
+          synchronizeRfqLifecycle({
+            pair,
+            rfq: invited.rfq,
+            invitations: invited.invitations,
+            quotes: [],
+            observedAt: "2026-04-02T00:10:00.000Z"
+          }).rfq.status
+        ).toBe("quote_expired");
+      }),
+      createDeterministicPropertyConfig({ numRuns: 20 })
     );
   });
 });

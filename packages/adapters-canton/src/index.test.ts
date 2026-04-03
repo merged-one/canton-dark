@@ -4,8 +4,11 @@ import {
   createAccessGrant,
   createPairInstance,
   type AuditRecord,
+  type DealerInvitation,
   type DealerQuote,
   type ExecutionTicket,
+  type QuoteRevision,
+  type QuoteWithdrawal,
   type RFQSession,
   type SettlementInstruction
 } from "@canton-dark/domain-core";
@@ -18,11 +21,14 @@ import {
   mapAccessGrantToCantonCommand,
   mapAuditRecordToCantonCommand,
   mapCancelRfqCommand,
+  mapDealerInvitationToCantonCommand,
   mapOperatorApprovalToCantonCommand,
   mapPairToCantonCommand,
   mapPausePairCommand,
   mapPauseStateToCantonCommand,
   mapProgressSettlementCommand,
+  mapQuoteRevisionToCantonCommand,
+  mapQuoteWithdrawalToCantonCommand,
   mapRegulatoryAttestationToCantonCommand,
   mapRejectRfqCommand,
   mapRulebookReleaseToCantonCommand
@@ -92,6 +98,45 @@ const quote: DealerQuote = {
   status: "open"
 };
 
+const invitation: DealerInvitation = {
+  invitationId: "invitation-1",
+  pairId: "pair-1",
+  rfqId: "rfq-1",
+  dealerId: "dealer-alpha",
+  subscriberId: "subscriber-1",
+  invitationVersion: 1,
+  invitedAt: "2026-04-02T00:01:30.000Z",
+  invitedBy: "subscriber-1",
+  responseWindowClosesAt: "2026-04-02T00:05:00.000Z",
+  updatedAt: "2026-04-02T00:02:00.000Z",
+  status: "responded",
+  respondedAt: "2026-04-02T00:02:00.000Z"
+};
+
+const quoteRevision: QuoteRevision = {
+  revisionId: "revision-1",
+  pairId: "pair-1",
+  rfqId: "rfq-1",
+  dealerId: "dealer-alpha",
+  subscriberId: "subscriber-1",
+  previousQuoteId: "quote-0",
+  nextQuoteId: "quote-1",
+  revisedAt: "2026-04-02T00:02:00.000Z",
+  revisedBy: "dealer-alpha"
+};
+
+const quoteWithdrawal: QuoteWithdrawal = {
+  withdrawalId: "withdrawal-1",
+  pairId: "pair-1",
+  rfqId: "rfq-1",
+  quoteId: "quote-0",
+  dealerId: "dealer-alpha",
+  subscriberId: "subscriber-1",
+  withdrawnAt: "2026-04-02T00:01:59.000Z",
+  withdrawnBy: "dealer-alpha",
+  reason: "replaced"
+};
+
 const execution: ExecutionTicket = {
   executionId: "execution-1",
   pairId: "pair-1",
@@ -143,6 +188,9 @@ describe("adapters-canton", () => {
         mode: "SingleDealerPair",
         operatorId: "operator-1",
         dealerId: "dealer-alpha",
+        dealerIds: ["dealer-alpha"],
+        operatorOversightRole: "full",
+        inviteRevisionPolicy: "locked",
         pauseState: {
           state: "active",
           changedAt: createdAt,
@@ -238,7 +286,62 @@ describe("adapters-canton", () => {
     expect(mapCancelRfqCommand(rfq, "subscriber-1").choice).toBe("Cancel");
     expect(mapRejectRfqCommand(rfq, "dealer-alpha").payload.reason).toBeNull();
     expect(mapRejectRfqCommand(rfq, "dealer-alpha", "manual").payload.reason).toBe("manual");
+    expect(mapDealerInvitationToCantonCommand(invitation)).toEqual({
+      action: "upsert_contract",
+      template: "DealerInvitation",
+      key: "invitation-1",
+      submitter: "subscriber-1",
+      observers: ["dealer-alpha", "subscriber-1"],
+      payload: {
+        pairId: "pair-1",
+        rfqId: "rfq-1",
+        dealerId: "dealer-alpha",
+        subscriberId: "subscriber-1",
+        invitedAt: "2026-04-02T00:01:30.000Z",
+        invitedBy: "subscriber-1",
+        invitationVersion: 1,
+        responseWindowClosesAt: "2026-04-02T00:05:00.000Z",
+        updatedAt: "2026-04-02T00:02:00.000Z",
+        status: "responded",
+        respondedAt: "2026-04-02T00:02:00.000Z",
+        withdrawnAt: null,
+        withdrawnBy: null,
+        withdrawalReason: null
+      }
+    });
     expect(mapAcceptQuoteCommand(quote, "subscriber-1").choice).toBe("Accept");
+    expect(mapQuoteRevisionToCantonCommand(quoteRevision)).toEqual({
+      action: "upsert_contract",
+      template: "QuoteRevision",
+      key: "revision-1",
+      submitter: "dealer-alpha",
+      observers: ["dealer-alpha", "subscriber-1"],
+      payload: {
+        pairId: "pair-1",
+        rfqId: "rfq-1",
+        dealerId: "dealer-alpha",
+        subscriberId: "subscriber-1",
+        previousQuoteId: "quote-0",
+        nextQuoteId: "quote-1",
+        revisedAt: "2026-04-02T00:02:00.000Z"
+      }
+    });
+    expect(mapQuoteWithdrawalToCantonCommand(quoteWithdrawal)).toEqual({
+      action: "upsert_contract",
+      template: "QuoteWithdrawal",
+      key: "withdrawal-1",
+      submitter: "dealer-alpha",
+      observers: ["dealer-alpha", "subscriber-1"],
+      payload: {
+        pairId: "pair-1",
+        rfqId: "rfq-1",
+        quoteId: "quote-0",
+        dealerId: "dealer-alpha",
+        subscriberId: "subscriber-1",
+        withdrawnAt: "2026-04-02T00:01:59.000Z",
+        reason: "replaced"
+      }
+    });
     expect(mapProgressSettlementCommand(settlement, "operator-1", "affirmed").payload.status).toBe(
       "affirmed"
     );
@@ -289,6 +392,9 @@ describe("adapters-canton", () => {
     expect(await ledger.listAccessGrants("missing")).toEqual([]);
     expect(await ledger.listRfqs("missing")).toEqual([]);
     expect(await ledger.listQuotes("missing")).toEqual([]);
+    expect(await ledger.listInvitations("missing")).toEqual([]);
+    expect(await ledger.listQuoteRevisions("missing")).toEqual([]);
+    expect(await ledger.listQuoteWithdrawals("missing")).toEqual([]);
     expect(await ledger.listExecutionTickets("missing")).toEqual([]);
     expect(await ledger.listSettlementInstructions("missing")).toEqual([]);
     expect(await auditLog.list("missing")).toEqual([]);
@@ -302,6 +408,9 @@ describe("adapters-canton", () => {
     await ledger.saveAccessGrant(grant);
     await ledger.saveRfq(rfq);
     await ledger.saveQuote(quote);
+    await ledger.saveInvitation(invitation);
+    await ledger.saveQuoteRevision(quoteRevision);
+    await ledger.saveQuoteWithdrawal(quoteWithdrawal);
     await ledger.saveExecutionTicket(execution);
     await ledger.saveSettlementInstruction(settlement);
     await auditLog.record(auditEntry);
@@ -314,6 +423,9 @@ describe("adapters-canton", () => {
     expect(await ledger.listAccessGrants("pair-1")).toEqual([grant]);
     expect(await ledger.listRfqs("pair-1")).toEqual([rfq]);
     expect(await ledger.listQuotes("pair-1")).toEqual([quote]);
+    expect(await ledger.listInvitations("pair-1")).toEqual([invitation]);
+    expect(await ledger.listQuoteRevisions("pair-1")).toEqual([quoteRevision]);
+    expect(await ledger.listQuoteWithdrawals("pair-1")).toEqual([quoteWithdrawal]);
     expect(await ledger.listExecutionTickets("pair-1")).toEqual([execution]);
     expect(await ledger.listSettlementInstructions("pair-1")).toEqual([settlement]);
     expect(await auditLog.list()).toEqual([auditEntry]);
@@ -327,6 +439,9 @@ describe("adapters-canton", () => {
       "AccessGrant",
       "RFQSession",
       "DealerQuote",
+      "DealerInvitation",
+      "QuoteRevision",
+      "QuoteWithdrawal",
       "ExecutionTicket",
       "SettlementInstruction",
       "AuditRecord"

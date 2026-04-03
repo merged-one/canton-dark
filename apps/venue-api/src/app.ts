@@ -6,13 +6,16 @@ import {
   ContractValidationError,
   demoClockAdvanceRequestSchema,
   grantAccessRequestSchema,
+  inviteDealersRequestSchema,
   markSettlementProgressionRequestSchema,
   openRfqRequestSchema,
   parseCreatePairRequest,
   parseDemoResetRequest,
   pausePairRequestSchema,
   rejectRfqRequestSchema,
+  rejectAllQuotesRequestSchema,
   submitQuoteRequestSchema,
+  withdrawQuoteRequestSchema,
   type DemoMode,
   type DemoStatusResponse,
   type HealthResponse
@@ -209,8 +212,16 @@ export const createVenueApiApp = async (
         const pair = await state.environment.application.createPair({
           actorId: getActorId(request, url),
           operatorId: body.operatorId,
-          dealerId: body.dealerId,
           jurisdiction: body.jurisdiction,
+          mode: body.mode,
+          ...(body.dealerId !== undefined ? { dealerId: body.dealerId } : {}),
+          ...(body.dealerIds !== undefined ? { dealerIds: body.dealerIds } : {}),
+          ...(body.operatorOversightRole !== undefined
+            ? { operatorOversightRole: body.operatorOversightRole }
+            : {}),
+          ...(body.inviteRevisionPolicy !== undefined
+            ? { inviteRevisionPolicy: body.inviteRevisionPolicy }
+            : {}),
           ...(body.pairId !== undefined ? { pairId: body.pairId } : {}),
           rulebookSummary: body.rulebookSummary,
           rulebookVersion: body.rulebookVersion
@@ -266,7 +277,48 @@ export const createVenueApiApp = async (
             pairId,
             instrumentId: body.instrumentId,
             side: body.side,
-            quantity: body.quantity
+            quantity: body.quantity,
+            ...(body.responseWindowClosesAt !== undefined
+              ? { responseWindowClosesAt: body.responseWindowClosesAt }
+              : {})
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "rfqs" &&
+        path[3] !== undefined &&
+        path[4] === "invite-dealers"
+      ) {
+        const body = parseBody(request.body, (value) => inviteDealersRequestSchema.parse(value));
+
+        return createReply(
+          200,
+          await state.environment.application.inviteDealers({
+            actorId: getActorId(request, url),
+            pairId,
+            rfqId: path[3],
+            dealerIds: body.dealerIds
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "rfqs" &&
+        path[3] !== undefined &&
+        path[4] === "revise-invite-set"
+      ) {
+        const body = parseBody(request.body, (value) => inviteDealersRequestSchema.parse(value));
+
+        return createReply(
+          200,
+          await state.environment.application.reviseInviteSet({
+            actorId: getActorId(request, url),
+            pairId,
+            rfqId: path[3],
+            dealerIds: body.dealerIds
           })
         );
       }
@@ -331,6 +383,62 @@ export const createVenueApiApp = async (
         request.method === "POST" &&
         path[2] === "quotes" &&
         path[3] !== undefined &&
+        path[4] === "revise"
+      ) {
+        const body = parseBody(request.body, (value) => submitQuoteRequestSchema.parse(value));
+        const quote = await state.environment.ledger.getQuote(path[3]);
+
+        if (quote === null) {
+          return createReply(404, {
+            message: `Quote ${path[3]} was not found.`
+          });
+        }
+
+        return createReply(
+          200,
+          await state.environment.application.reviseQuote({
+            actorId: getActorId(request, url),
+            pairId,
+            rfqId: quote.rfqId,
+            quoteId: quote.quoteId,
+            price: body.price,
+            quantity: body.quantity,
+            expiresAt: body.expiresAt
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "quotes" &&
+        path[3] !== undefined &&
+        path[4] === "withdraw"
+      ) {
+        const body = parseBody(request.body, (value) => withdrawQuoteRequestSchema.parse(value));
+        const quote = await state.environment.ledger.getQuote(path[3]);
+
+        if (quote === null) {
+          return createReply(404, {
+            message: `Quote ${path[3]} was not found.`
+          });
+        }
+
+        return createReply(
+          200,
+          await state.environment.application.withdrawQuote({
+            actorId: getActorId(request, url),
+            pairId,
+            rfqId: quote.rfqId,
+            quoteId: quote.quoteId,
+            ...(body.reason !== undefined ? { reason: body.reason } : {})
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "quotes" &&
+        path[3] !== undefined &&
         path[4] === "accept"
       ) {
         const quote = await state.environment.ledger.getQuote(path[3]);
@@ -348,6 +456,25 @@ export const createVenueApiApp = async (
             pairId,
             rfqId: quote.rfqId,
             quoteId: quote.quoteId
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "rfqs" &&
+        path[3] !== undefined &&
+        path[4] === "reject-all"
+      ) {
+        const body = parseBody(request.body, (value) => rejectAllQuotesRequestSchema.parse(value));
+
+        return createReply(
+          200,
+          await state.environment.application.rejectAllQuotes({
+            actorId: getActorId(request, url),
+            pairId,
+            rfqId: path[3],
+            ...(body.reason !== undefined ? { reason: body.reason } : {})
           })
         );
       }
@@ -420,9 +547,54 @@ export const createVenueApiApp = async (
           : createReply(200, view);
       }
 
+      if (request.method === "GET" && path[2] === "views" && path[3] === "operator-oversight") {
+        const view = await state.environment.application.getOperatorOversightView(
+          pairId,
+          getActorId(request, url)
+        );
+
+        return view === null
+          ? createReply(404, { message: `Pair ${pairId} was not found.` })
+          : createReply(200, view);
+      }
+
       if (request.method === "GET" && path[2] === "audit-trail") {
         const view = await state.environment.application.getAuditTrail(
           pairId,
+          getActorId(request, url)
+        );
+
+        return view === null
+          ? createReply(404, { message: `Pair ${pairId} was not found.` })
+          : createReply(200, view);
+      }
+
+      if (
+        request.method === "GET" &&
+        path[2] === "rfqs" &&
+        path[3] !== undefined &&
+        path[4] === "quote-ladder"
+      ) {
+        const view = await state.environment.application.getSubscriberQuoteLadder(
+          pairId,
+          path[3],
+          getActorId(request, url)
+        );
+
+        return view === null
+          ? createReply(404, { message: `RFQ ${path[3]} was not found.` })
+          : createReply(200, view);
+      }
+
+      if (
+        request.method === "GET" &&
+        path[2] === "dealers" &&
+        path[3] !== undefined &&
+        path[4] === "history"
+      ) {
+        const view = await state.environment.application.getDealerInvitationHistory(
+          pairId,
+          path[3],
           getActorId(request, url)
         );
 

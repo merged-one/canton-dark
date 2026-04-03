@@ -40,6 +40,9 @@ describe("adapters-memory", () => {
     expect(await ledger.listAccessGrants("missing")).toEqual([]);
     expect(await ledger.listRfqs("missing")).toEqual([]);
     expect(await ledger.listQuotes("missing")).toEqual([]);
+    expect(await ledger.listInvitations("missing")).toEqual([]);
+    expect(await ledger.listQuoteRevisions("missing")).toEqual([]);
+    expect(await ledger.listQuoteWithdrawals("missing")).toEqual([]);
     expect(await ledger.listExecutionTickets("missing")).toEqual([]);
     expect(await ledger.listSettlementInstructions("missing")).toEqual([]);
 
@@ -48,6 +51,9 @@ describe("adapters-memory", () => {
       mode: "SingleDealerPair",
       operatorId: "operator-1",
       dealerId: "dealer-alpha",
+      dealerIds: ["dealer-alpha"],
+      operatorOversightRole: "full",
+      inviteRevisionPolicy: "locked",
       createdAt: "2026-04-02T00:00:00.000Z",
       updatedAt: "2026-04-02T00:00:00.000Z",
       operatorApproval: {
@@ -108,6 +114,42 @@ describe("adapters-memory", () => {
       updatedAt: "2026-04-02T00:02:00.000Z",
       status: "open"
     });
+    await ledger.saveInvitation({
+      invitationId: "invitation-1",
+      pairId: "pair-1",
+      rfqId: "rfq-1",
+      dealerId: "dealer-alpha",
+      subscriberId: "subscriber-1",
+      invitationVersion: 1,
+      invitedAt: "2026-04-02T00:01:30.000Z",
+      invitedBy: "subscriber-1",
+      responseWindowClosesAt: "2026-04-02T00:05:00.000Z",
+      updatedAt: "2026-04-02T00:02:00.000Z",
+      status: "responded",
+      respondedAt: "2026-04-02T00:02:00.000Z"
+    });
+    await ledger.saveQuoteRevision({
+      revisionId: "revision-1",
+      pairId: "pair-1",
+      rfqId: "rfq-1",
+      dealerId: "dealer-alpha",
+      subscriberId: "subscriber-1",
+      previousQuoteId: "quote-0",
+      nextQuoteId: "quote-1",
+      revisedAt: "2026-04-02T00:02:00.000Z",
+      revisedBy: "dealer-alpha"
+    });
+    await ledger.saveQuoteWithdrawal({
+      withdrawalId: "withdrawal-1",
+      pairId: "pair-1",
+      rfqId: "rfq-1",
+      quoteId: "quote-0",
+      dealerId: "dealer-alpha",
+      subscriberId: "subscriber-1",
+      withdrawnAt: "2026-04-02T00:01:59.000Z",
+      withdrawnBy: "dealer-alpha",
+      reason: "replaced"
+    });
     await ledger.saveExecutionTicket({
       executionId: "execution-1",
       pairId: "pair-1",
@@ -142,6 +184,9 @@ describe("adapters-memory", () => {
     expect(await ledger.listAccessGrants("pair-1")).toHaveLength(1);
     expect(await ledger.listRfqs("pair-1")).toHaveLength(1);
     expect(await ledger.listQuotes("pair-1")).toHaveLength(1);
+    expect(await ledger.listInvitations("pair-1")).toHaveLength(1);
+    expect(await ledger.listQuoteRevisions("pair-1")).toHaveLength(1);
+    expect(await ledger.listQuoteWithdrawals("pair-1")).toHaveLength(1);
     expect(await ledger.listExecutionTickets("pair-1")).toHaveLength(1);
     expect(await ledger.listSettlementInstructions("pair-1")).toHaveLength(1);
     expect(await auditLog.list("pair-1")).toEqual([
@@ -160,6 +205,9 @@ describe("adapters-memory", () => {
       accessGrants: await ledger.listAccessGrants("pair-1"),
       rfqs: await ledger.listRfqs("pair-1"),
       quotes: await ledger.listQuotes("pair-1"),
+      invitations: await ledger.listInvitations("pair-1"),
+      quoteRevisions: await ledger.listQuoteRevisions("pair-1"),
+      quoteWithdrawals: await ledger.listQuoteWithdrawals("pair-1"),
       executions: await ledger.listExecutionTickets("pair-1"),
       settlements: await ledger.listSettlementInstructions("pair-1")
     });

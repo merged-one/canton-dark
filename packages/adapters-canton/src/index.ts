@@ -2,9 +2,12 @@ import type { AuditLogPort, LedgerPort } from "@canton-dark/app-services";
 import type {
   AccessGrant,
   AuditRecord,
+  DealerInvitation,
   DealerQuote,
   ExecutionTicket,
   PairInstance,
+  QuoteRevision,
+  QuoteWithdrawal,
   RFQSession,
   SettlementInstruction,
   SettlementStatus
@@ -41,7 +44,10 @@ export type StubCantonTransport = CantonTransport & {
 
 const clone = <T>(value: T): T => structuredClone(value);
 
-const pairObservers = (pair: PairInstance): readonly string[] => [pair.operatorId, pair.dealerId];
+const pairObservers = (pair: PairInstance): readonly string[] =>
+  [pair.operatorId, ...pair.dealerIds].filter(
+    (party, index, values) => values.indexOf(party) === index
+  );
 
 export const mapOperatorApprovalToCantonCommand = (pair: PairInstance): CantonCommand => ({
   action: "upsert_contract",
@@ -111,6 +117,9 @@ export const mapPairToCantonCommand = (pair: PairInstance): CantonCommand => ({
     mode: pair.mode,
     operatorId: pair.operatorId,
     dealerId: pair.dealerId,
+    dealerIds: pair.dealerIds,
+    operatorOversightRole: pair.operatorOversightRole,
+    inviteRevisionPolicy: pair.inviteRevisionPolicy,
     pauseState: pair.pauseState,
     rulebookRelease: pair.rulebookRelease,
     regulatoryAttestation: pair.regulatoryAttestation,
@@ -139,16 +148,45 @@ export const mapRfqSessionToCantonCommand = (rfq: RFQSession): CantonCommand => 
   template: "RFQSession",
   key: rfq.rfqId,
   submitter: rfq.subscriberId,
-  observers: [rfq.subscriberId, rfq.dealerId],
+  observers: [rfq.subscriberId, ...(rfq.invitedDealerIds ?? [rfq.dealerId])],
   payload: {
     pairId: rfq.pairId,
     dealerId: rfq.dealerId,
+    invitedDealerIds: rfq.invitedDealerIds ?? null,
+    currentInvitationVersion: rfq.currentInvitationVersion ?? null,
     subscriberId: rfq.subscriberId,
     instrumentId: rfq.instrumentId,
     side: rfq.side,
     quantity: rfq.quantity,
     status: rfq.status,
-    acceptedQuoteId: rfq.acceptedQuoteId ?? null
+    acceptedQuoteId: rfq.acceptedQuoteId ?? null,
+    firstResponseAt: rfq.firstResponseAt ?? null,
+    responseWindowClosesAt: rfq.responseWindowClosesAt ?? null
+  }
+});
+
+export const mapDealerInvitationToCantonCommand = (
+  invitation: DealerInvitation
+): CantonCommand => ({
+  action: "upsert_contract",
+  template: "DealerInvitation",
+  key: invitation.invitationId,
+  submitter: invitation.invitedBy,
+  observers: [invitation.dealerId, invitation.subscriberId],
+  payload: {
+    pairId: invitation.pairId,
+    rfqId: invitation.rfqId,
+    dealerId: invitation.dealerId,
+    subscriberId: invitation.subscriberId,
+    invitedAt: invitation.invitedAt,
+    invitedBy: invitation.invitedBy,
+    invitationVersion: invitation.invitationVersion,
+    responseWindowClosesAt: invitation.responseWindowClosesAt,
+    status: invitation.status,
+    respondedAt: invitation.respondedAt ?? null,
+    withdrawnAt: invitation.withdrawnAt ?? null,
+    withdrawnBy: invitation.withdrawnBy ?? null,
+    withdrawalReason: invitation.withdrawalReason ?? null
   }
 });
 
@@ -166,7 +204,47 @@ export const mapDealerQuoteToCantonCommand = (quote: DealerQuote): CantonCommand
     price: quote.price,
     quantity: quote.quantity,
     status: quote.status,
-    expiresAt: quote.expiresAt
+    expiresAt: quote.expiresAt,
+    previousQuoteId: quote.previousQuoteId ?? null,
+    replacementQuoteId: quote.replacementQuoteId ?? null,
+    staleReason: quote.staleReason ?? null,
+    withdrawnAt: quote.withdrawnAt ?? null,
+    withdrawnBy: quote.withdrawnBy ?? null,
+    withdrawalReason: quote.withdrawalReason ?? null
+  }
+});
+
+export const mapQuoteRevisionToCantonCommand = (revision: QuoteRevision): CantonCommand => ({
+  action: "upsert_contract",
+  template: "QuoteRevision",
+  key: revision.revisionId,
+  submitter: revision.revisedBy,
+  observers: [revision.dealerId, revision.subscriberId],
+  payload: {
+    pairId: revision.pairId,
+    rfqId: revision.rfqId,
+    dealerId: revision.dealerId,
+    subscriberId: revision.subscriberId,
+    previousQuoteId: revision.previousQuoteId,
+    nextQuoteId: revision.nextQuoteId,
+    revisedAt: revision.revisedAt
+  }
+});
+
+export const mapQuoteWithdrawalToCantonCommand = (withdrawal: QuoteWithdrawal): CantonCommand => ({
+  action: "upsert_contract",
+  template: "QuoteWithdrawal",
+  key: withdrawal.withdrawalId,
+  submitter: withdrawal.withdrawnBy,
+  observers: [withdrawal.dealerId, withdrawal.subscriberId],
+  payload: {
+    pairId: withdrawal.pairId,
+    rfqId: withdrawal.rfqId,
+    quoteId: withdrawal.quoteId,
+    dealerId: withdrawal.dealerId,
+    subscriberId: withdrawal.subscriberId,
+    withdrawnAt: withdrawal.withdrawnAt,
+    reason: withdrawal.reason ?? null
   }
 });
 
@@ -325,6 +403,9 @@ export const createCantonLedgerPort = (transport: CantonTransport): LedgerPort =
   const accessGrants = new Map<string, AccessGrant[]>();
   const rfqs = new Map<string, RFQSession>();
   const quotes = new Map<string, DealerQuote>();
+  const invitations = new Map<string, DealerInvitation>();
+  const quoteRevisions = new Map<string, QuoteRevision>();
+  const quoteWithdrawals = new Map<string, QuoteWithdrawal>();
   const executions = new Map<string, ExecutionTicket>();
   const settlements = new Map<string, SettlementInstruction>();
 
@@ -350,8 +431,19 @@ export const createCantonLedgerPort = (transport: CantonTransport): LedgerPort =
     async listExecutionTickets(pairId) {
       return clone([...executions.values()].filter((execution) => execution.pairId === pairId));
     },
+    async listInvitations(pairId) {
+      return clone([...invitations.values()].filter((invitation) => invitation.pairId === pairId));
+    },
     async listPairs() {
       return clone([...pairs.values()]);
+    },
+    async listQuoteRevisions(pairId) {
+      return clone([...quoteRevisions.values()].filter((revision) => revision.pairId === pairId));
+    },
+    async listQuoteWithdrawals(pairId) {
+      return clone(
+        [...quoteWithdrawals.values()].filter((withdrawal) => withdrawal.pairId === pairId)
+      );
     },
     async listQuotes(pairId) {
       return clone([...quotes.values()].filter((quote) => quote.pairId === pairId));
@@ -370,6 +462,10 @@ export const createCantonLedgerPort = (transport: CantonTransport): LedgerPort =
       await transport.submit(mapExecutionTicketToCantonCommand(execution));
       executions.set(execution.executionId, clone(execution));
     },
+    async saveInvitation(invitation) {
+      await transport.submit(mapDealerInvitationToCantonCommand(invitation));
+      invitations.set(invitation.invitationId, clone(invitation));
+    },
     async savePair(pair) {
       await transport.submit(mapOperatorApprovalToCantonCommand(pair));
       await transport.submit(mapRegulatoryAttestationToCantonCommand(pair));
@@ -381,6 +477,14 @@ export const createCantonLedgerPort = (transport: CantonTransport): LedgerPort =
     async saveQuote(quote) {
       await transport.submit(mapDealerQuoteToCantonCommand(quote));
       quotes.set(quote.quoteId, clone(quote));
+    },
+    async saveQuoteRevision(revision) {
+      await transport.submit(mapQuoteRevisionToCantonCommand(revision));
+      quoteRevisions.set(revision.revisionId, clone(revision));
+    },
+    async saveQuoteWithdrawal(withdrawal) {
+      await transport.submit(mapQuoteWithdrawalToCantonCommand(withdrawal));
+      quoteWithdrawals.set(withdrawal.withdrawalId, clone(withdrawal));
     },
     async saveRfq(rfq) {
       await transport.submit(mapRfqSessionToCantonCommand(rfq));

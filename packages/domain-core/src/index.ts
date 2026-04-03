@@ -1,6 +1,9 @@
 export type PairMode = "ATSPair" | "SingleDealerPair";
 export type VenueMode = PairMode;
 
+export type OperatorOversightRole = "blinded" | "full";
+export type InviteRevisionPolicy = "before_first_response" | "locked";
+
 export type ParticipantRole =
   | "auditor"
   | "dealer"
@@ -57,9 +60,12 @@ export type RulebookRelease = {
 export type PairInstance = {
   createdAt: string;
   dealerId: string;
-  mode: "SingleDealerPair";
+  dealerIds: readonly string[];
+  inviteRevisionPolicy: InviteRevisionPolicy;
+  mode: PairMode;
   operatorApproval: OperatorApproval;
   operatorId: string;
+  operatorOversightRole: OperatorOversightRole;
   pairId: string;
   pauseState: PauseState;
   regulatoryAttestation: RegulatoryAttestation;
@@ -95,13 +101,17 @@ export type RFQSession = {
   cancelledAt?: string;
   cancelledBy?: string;
   createdAt: string;
+  currentInvitationVersion?: number;
   dealerId: string;
+  firstResponseAt?: string;
   instrumentId: string;
+  invitedDealerIds?: readonly string[];
   pairId: string;
   quantity: number;
   rejectedAt?: string;
   rejectedBy?: string;
   rejectionReason?: string;
+  responseWindowClosesAt?: string;
   rfqId: string;
   side: RFQSide;
   status: RFQSessionStatus;
@@ -109,7 +119,30 @@ export type RFQSession = {
   updatedAt: string;
 };
 
-export type DealerQuoteStatus = "accepted" | "expired" | "open";
+export type DealerInvitationStatus = "expired" | "open" | "responded" | "withdrawn";
+
+export type DealerInvitation = {
+  dealerId: string;
+  firstQuoteId?: string;
+  invitationId: string;
+  invitationVersion: number;
+  invitedAt: string;
+  invitedBy: string;
+  pairId: string;
+  responseWindowClosesAt: string;
+  respondedAt?: string;
+  rfqId: string;
+  status: DealerInvitationStatus;
+  subscriberId: string;
+  updatedAt: string;
+  withdrawnAt?: string;
+  withdrawnBy?: string;
+  withdrawalReason?: string;
+};
+
+export type DealerQuoteStatus = "accepted" | "expired" | "open" | "stale" | "withdrawn";
+export type FirmQuoteStatus = DealerQuoteStatus;
+export type StaleQuoteReason = "accepted_elsewhere" | "rejected_all" | "revised";
 
 export type DealerQuote = {
   acceptedAt?: string;
@@ -118,13 +151,50 @@ export type DealerQuote = {
   dealerId: string;
   expiresAt: string;
   pairId: string;
+  previousQuoteId?: string;
   price: number;
   quantity: number;
   quoteId: string;
+  replacementQuoteId?: string;
   rfqId: string;
+  staleReason?: StaleQuoteReason;
   status: DealerQuoteStatus;
   subscriberId: string;
   updatedAt: string;
+  withdrawalReason?: string;
+  withdrawnAt?: string;
+  withdrawnBy?: string;
+};
+
+export type FirmQuote = DealerQuote;
+
+export type QuoteRevision = {
+  dealerId: string;
+  nextQuoteId: string;
+  pairId: string;
+  previousQuoteId: string;
+  revisedAt: string;
+  revisedBy: string;
+  revisionId: string;
+  rfqId: string;
+  subscriberId: string;
+};
+
+export type QuoteWithdrawal = {
+  dealerId: string;
+  pairId: string;
+  quoteId: string;
+  reason?: string;
+  rfqId: string;
+  subscriberId: string;
+  withdrawalId: string;
+  withdrawnAt: string;
+  withdrawnBy: string;
+};
+
+export type RankedQuote = {
+  quote: DealerQuote;
+  rank: number;
 };
 
 export type ExecutionTicket = {
@@ -162,7 +232,12 @@ export type AuditRecord = {
 };
 
 export type DomainErrorCode =
+  | "ATS_PAIR_REQUIRES_MULTIPLE_DEALERS"
   | "EMPTY_IDENTIFIER"
+  | "INVALID_DEALER_SET"
+  | "INVALID_INVITATION_DEALER"
+  | "INVALID_INVITE_SET"
+  | "INVALID_OPERATOR_OVERSIGHT"
   | "INVALID_PAUSE_REASON"
   | "INVALID_QUOTE_EXPIRY"
   | "INVALID_QUOTE_PRICE"
@@ -170,14 +245,22 @@ export type DomainErrorCode =
   | "INVALID_RFQ_QUANTITY"
   | "INVALID_RULEBOOK_RELEASE"
   | "INVALID_SETTLEMENT_TRANSITION"
+  | "INVITATION_NOT_OPEN"
+  | "INVITATION_REQUIRED"
+  | "INVITE_SET_LOCKED"
   | "MISSING_ENTITLEMENT"
   | "PAIR_APPROVAL_REQUIRED"
   | "PAIR_IS_PAUSED"
+  | "PAIR_MODE_MISMATCH"
   | "PAIR_OPERATOR_REQUIRED"
   | "PAIR_REGULATORY_ATTESTATION_REQUIRED"
   | "QUOTE_ALREADY_ACCEPTED"
   | "QUOTE_EXPIRED"
+  | "QUOTE_NOT_CURRENT"
   | "QUOTE_NOT_OPEN"
+  | "QUOTE_STALE"
+  | "QUOTE_WITHDRAWN"
+  | "RESPONSE_WINDOW_EXPIRED"
   | "RFQ_DEALER_MISMATCH"
   | "RFQ_NOT_OPEN"
   | "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER";
@@ -218,10 +301,13 @@ export function assertInvariant(
 
 export type CreatePairInstanceInput = {
   createdAt: string;
-  dealerId: string;
-  mode: "SingleDealerPair";
+  dealerId?: string;
+  dealerIds?: readonly string[];
+  inviteRevisionPolicy?: InviteRevisionPolicy;
+  mode: PairMode;
   operatorApproval: OperatorApproval;
   operatorId: string;
+  operatorOversightRole?: OperatorOversightRole;
   pairId: string;
   pauseState?: PauseState;
   regulatoryAttestation: RegulatoryAttestation;
@@ -252,21 +338,76 @@ export type CreateRfqSessionInput = {
   instrumentId: string;
   pair: PairInstance;
   quantity: number;
+  responseWindowClosesAt?: string;
   rfqId: string;
   side: RFQSide;
   subscriberId: string;
+};
+
+export type CreateDealerInvitationsInput = {
+  accessGrants: readonly AccessGrant[];
+  createdAt: string;
+  dealerIds: readonly string[];
+  invitations: readonly DealerInvitation[];
+  invitedBy: string;
+  pair: PairInstance;
+  rfq: RFQSession;
+};
+
+export type CreateDealerInvitationsResult = {
+  invitations: readonly DealerInvitation[];
+  rfq: RFQSession;
 };
 
 export type CreateDealerQuoteInput = {
   accessGrants: readonly AccessGrant[];
   createdAt: string;
   dealerId: string;
+  existingQuotes?: readonly DealerQuote[];
   expiresAt: string;
+  invitations?: readonly DealerInvitation[];
   pair: PairInstance;
   price: number;
   quantity: number;
   quoteId: string;
   rfq: RFQSession;
+};
+
+export type ReviseDealerQuoteInput = {
+  accessGrants: readonly AccessGrant[];
+  createdAt: string;
+  dealerId: string;
+  existingQuotes?: readonly DealerQuote[];
+  expiresAt: string;
+  invitations?: readonly DealerInvitation[];
+  pair: PairInstance;
+  price: number;
+  quantity: number;
+  quote: DealerQuote;
+  quoteId: string;
+  revisionId: string;
+  rfq: RFQSession;
+};
+
+export type ReviseDealerQuoteResult = {
+  nextQuote: DealerQuote;
+  previousQuote: DealerQuote;
+  revision: QuoteRevision;
+};
+
+export type WithdrawDealerQuoteInput = {
+  dealerId: string;
+  pair: PairInstance;
+  quote: DealerQuote;
+  reason?: string;
+  rfq: RFQSession;
+  withdrawalId: string;
+  withdrawnAt: string;
+};
+
+export type WithdrawDealerQuoteResult = {
+  quote: DealerQuote;
+  withdrawal?: QuoteWithdrawal;
 };
 
 export type AcceptDealerQuoteInput = {
@@ -275,6 +416,7 @@ export type AcceptDealerQuoteInput = {
   accessGrants: readonly AccessGrant[];
   executionId: string;
   instructionId: string;
+  otherQuotes?: readonly DealerQuote[];
   pair: PairInstance;
   quote: DealerQuote;
   rfq: RFQSession;
@@ -285,12 +427,41 @@ export type AcceptDealerQuoteResult = {
   quote: DealerQuote;
   rfq: RFQSession;
   settlementInstruction: SettlementInstruction;
+  staleQuotes: readonly DealerQuote[];
 };
 
 export type RejectRfqSessionInput = {
   rejectedAt: string;
   rejectedBy: string;
   reason?: string;
+  rfq: RFQSession;
+};
+
+export type RejectAllQuotesInput = {
+  accessGrants: readonly AccessGrant[];
+  quotes: readonly DealerQuote[];
+  reason?: string;
+  rejectedAt: string;
+  rejectedBy: string;
+  rfq: RFQSession;
+};
+
+export type RejectAllQuotesResult = {
+  rfq: RFQSession;
+  staleQuotes: readonly DealerQuote[];
+};
+
+export type SynchronizeRfqLifecycleInput = {
+  invitations?: readonly DealerInvitation[];
+  observedAt: string;
+  pair: PairInstance;
+  quotes?: readonly DealerQuote[];
+  rfq: RFQSession;
+};
+
+export type SynchronizeRfqLifecycleResult = {
+  invitations: readonly DealerInvitation[];
+  quotes: readonly DealerQuote[];
   rfq: RFQSession;
 };
 
@@ -328,6 +499,9 @@ const settlementTransitions: Record<SettlementStatus, readonly SettlementStatus[
   settled: [],
   failed: []
 };
+
+export const quoteTieBreakRule =
+  "Best price, then larger quantity, then earliest quote creation time, then lexicographic quote id.";
 
 const normalizeString = (value: string): string => value.trim();
 
@@ -426,8 +600,104 @@ const toMillis = (value: string, code: DomainErrorCode, field: string): number =
   return millis;
 };
 
+const uniqueSortedStrings = (values: readonly string[]): readonly string[] =>
+  [...new Set(values.map((value) => normalizeString(value)).filter(Boolean))].sort((left, right) =>
+    left.localeCompare(right)
+  );
+
+const normalizeStringList = (
+  values: readonly string[],
+  code: DomainErrorCode,
+  message: string,
+  field: string
+): readonly string[] => {
+  const normalized = uniqueSortedStrings(values);
+
+  assertInvariant(normalized.length > 0, code, message, { field, values });
+
+  return normalized;
+};
+
+const equalStringLists = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
+const ensureDealerBoundToPair = (pair: PairInstance, dealerId: string): void => {
+  assertInvariant(
+    pair.dealerIds.includes(dealerId),
+    pair.mode === "SingleDealerPair"
+      ? "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER"
+      : "INVALID_INVITATION_DEALER",
+    pair.mode === "SingleDealerPair"
+      ? "SingleDealerPair venues must bind exactly one dealer."
+      : `Dealer ${dealerId} is not bound to ATSPair ${pair.pairId}.`,
+    {
+      dealerId,
+      pairId: pair.pairId
+    }
+  );
+};
+
+const resolveRfqInvitedDealerIdsInternal = (rfq: RFQSession): readonly string[] =>
+  rfq.invitedDealerIds === undefined ? [rfq.dealerId] : uniqueSortedStrings(rfq.invitedDealerIds);
+
+const isRfqResponseWindowOpen = (rfq: RFQSession, observedAt: string): boolean =>
+  rfq.responseWindowClosesAt === undefined
+    ? true
+    : toMillis(observedAt, "INVALID_QUOTE_EXPIRY", "observedAt") <
+      toMillis(rfq.responseWindowClosesAt, "INVALID_QUOTE_EXPIRY", "responseWindowClosesAt");
+
+const matchRfqQuote =
+  (rfq: RFQSession) =>
+  (quote: DealerQuote): boolean =>
+    quote.pairId === rfq.pairId && quote.rfqId === rfq.rfqId;
+
+const matchRfqInvitation =
+  (rfq: RFQSession) =>
+  (invitation: DealerInvitation): boolean =>
+    invitation.pairId === rfq.pairId && invitation.rfqId === rfq.rfqId;
+
+const activeInvitationForDealer = (
+  invitations: readonly DealerInvitation[],
+  dealerId: string
+): DealerInvitation | undefined =>
+  invitations.find(
+    (invitation) =>
+      invitation.dealerId === dealerId &&
+      (invitation.status === "open" || invitation.status === "responded")
+  );
+
+const markQuoteStale = (
+  quote: DealerQuote,
+  updatedAt: string,
+  reason: StaleQuoteReason,
+  replacementQuoteId?: string
+): DealerQuote => {
+  /* c8 ignore next 3 -- current callers only pass open quotes or short-circuit stale earlier */
+  if (quote.status === "stale") {
+    return quote;
+  }
+
+  assertInvariant(quote.status === "open", "QUOTE_NOT_OPEN", "Only open quotes may become stale.", {
+    quoteId: quote.quoteId,
+    status: quote.status
+  });
+
+  return {
+    ...quote,
+    status: "stale",
+    staleReason: reason,
+    updatedAt: normalizeTimestamp(updatedAt, "updatedAt"),
+    ...(replacementQuoteId !== undefined ? { replacementQuoteId } : {})
+  };
+};
+
 export const getRoleEntitlements = (role: ParticipantRole): readonly Entitlement[] =>
   roleEntitlementCatalog[role];
+
+export const listPairDealerIds = (pair: PairInstance): readonly string[] => pair.dealerIds;
+
+export const resolveRfqInvitedDealerIds = (rfq: RFQSession): readonly string[] =>
+  resolveRfqInvitedDealerIdsInternal(rfq);
 
 export const createPairInstance = (input: CreatePairInstanceInput): PairInstance => {
   const createdAt = normalizeTimestamp(input.createdAt, "createdAt");
@@ -439,12 +709,6 @@ export const createPairInstance = (input: CreatePairInstanceInput): PairInstance
     "PAIR_OPERATOR_REQUIRED",
     "Each pair must identify the owning operator.",
     { field: "operatorId" }
-  );
-  const dealerId = assertNonEmpty(
-    input.dealerId,
-    "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER",
-    "SingleDealerPair venues must bind exactly one dealer.",
-    { field: "dealerId" }
   );
   const approvalNote = normalizeOptionalNote(input.operatorApproval.note);
   const operatorApproval: OperatorApproval = {
@@ -524,11 +788,79 @@ export const createPairInstance = (input: CreatePairInstanceInput): PairInstance
     { regulatoryAttestation }
   );
 
+  if (input.mode === "SingleDealerPair") {
+    const dealerId = assertNonEmpty(
+      input.dealerId ?? "",
+      "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER",
+      "SingleDealerPair venues must bind exactly one dealer.",
+      { field: "dealerId" }
+    );
+    const dealerIds = normalizeStringList(
+      input.dealerIds ?? [dealerId],
+      "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER",
+      "SingleDealerPair venues must bind exactly one dealer.",
+      "dealerIds"
+    );
+
+    assertInvariant(
+      dealerIds.length === 1 && dealerIds[0] === dealerId,
+      "SINGLE_DEALER_PAIR_REQUIRES_ONE_DEALER",
+      "SingleDealerPair venues must bind exactly one dealer.",
+      {
+        dealerId,
+        dealerIds
+      }
+    );
+
+    return {
+      pairId,
+      mode: "SingleDealerPair",
+      operatorId,
+      dealerId,
+      dealerIds,
+      operatorOversightRole: "full",
+      inviteRevisionPolicy: "locked",
+      operatorApproval,
+      regulatoryAttestation,
+      rulebookRelease,
+      createdAt,
+      updatedAt: createdAt,
+      pauseState: normalizePauseState(input.pauseState, operatorId, createdAt)
+    };
+  }
+
+  const dealerIds = normalizeStringList(
+    input.dealerIds ?? [],
+    "ATS_PAIR_REQUIRES_MULTIPLE_DEALERS",
+    "ATSPair venues must bind at least two dealers.",
+    "dealerIds"
+  );
+
+  assertInvariant(
+    dealerIds.length > 1,
+    "ATS_PAIR_REQUIRES_MULTIPLE_DEALERS",
+    "ATSPair venues must bind at least two dealers.",
+    { dealerIds }
+  );
+  const [primaryDealerId] = dealerIds;
+
+  assertInvariant(
+    primaryDealerId !== undefined,
+    "ATS_PAIR_REQUIRES_MULTIPLE_DEALERS",
+    "ATSPair venues must bind at least two dealers.",
+    { dealerIds }
+  );
+
+  const operatorOversightRole = input.operatorOversightRole ?? "full";
+
   return {
     pairId,
-    mode: "SingleDealerPair",
+    mode: "ATSPair",
     operatorId,
-    dealerId,
+    dealerId: primaryDealerId,
+    dealerIds,
+    operatorOversightRole,
+    inviteRevisionPolicy: input.inviteRevisionPolicy ?? "before_first_response",
     operatorApproval,
     regulatoryAttestation,
     rulebookRelease,
@@ -656,12 +988,16 @@ export const createRfqSession = (input: CreateRfqSessionInput): RFQSession => {
     { quantity: input.quantity }
   );
 
-  return {
+  const createdAt = normalizeTimestamp(input.createdAt, "createdAt");
+  const nextRfq: RFQSession = {
     rfqId: assertNonEmpty(input.rfqId, "EMPTY_IDENTIFIER", "rfqId is required.", {
       field: "rfqId"
     }),
     pairId: input.pair.pairId,
     dealerId: input.pair.dealerId,
+    invitedDealerIds:
+      input.pair.mode === "SingleDealerPair" ? [input.pair.dealerId] : ([] as readonly string[]),
+    currentInvitationVersion: input.pair.mode === "SingleDealerPair" ? 1 : 0,
     subscriberId,
     instrumentId: assertNonEmpty(
       input.instrumentId,
@@ -671,10 +1007,37 @@ export const createRfqSession = (input: CreateRfqSessionInput): RFQSession => {
     ),
     side: input.side,
     quantity: input.quantity,
-    createdAt: normalizeTimestamp(input.createdAt, "createdAt"),
-    updatedAt: normalizeTimestamp(input.createdAt, "createdAt"),
+    createdAt,
+    updatedAt: createdAt,
     status: "open"
   };
+
+  if (input.pair.mode === "ATSPair") {
+    const responseWindowClosesAt = normalizeTimestamp(
+      input.responseWindowClosesAt ?? "",
+      "responseWindowClosesAt"
+    );
+    const createdAtMillis = toMillis(createdAt, "INVALID_QUOTE_EXPIRY", "createdAt");
+    const responseWindowMillis = toMillis(
+      responseWindowClosesAt,
+      "INVALID_QUOTE_EXPIRY",
+      "responseWindowClosesAt"
+    );
+
+    assertInvariant(
+      responseWindowMillis > createdAtMillis,
+      "INVALID_QUOTE_EXPIRY",
+      "RFQ response windows must close after RFQ creation.",
+      {
+        createdAt,
+        responseWindowClosesAt
+      }
+    );
+
+    nextRfq.responseWindowClosesAt = responseWindowClosesAt;
+  }
+
+  return nextRfq;
 };
 
 export const cancelRfqSession = (
@@ -740,7 +1103,7 @@ export const markRfqQuoted = (rfq: RFQSession, updatedAt: string): RFQSession =>
   }
 
   assertInvariant(
-    rfq.status === "open",
+    rfq.status === "open" || rfq.status === "quote_expired",
     "RFQ_NOT_OPEN",
     "Only open RFQs may receive a dealer quote.",
     { rfqId: rfq.rfqId, status: rfq.status }
@@ -749,6 +1112,7 @@ export const markRfqQuoted = (rfq: RFQSession, updatedAt: string): RFQSession =>
   return {
     ...rfq,
     status: "quoted",
+    firstResponseAt: rfq.firstResponseAt ?? normalizeTimestamp(updatedAt, "updatedAt"),
     updatedAt: normalizeTimestamp(updatedAt, "updatedAt")
   };
 };
@@ -759,9 +1123,9 @@ export const markRfqQuoteExpired = (rfq: RFQSession, updatedAt: string): RFQSess
   }
 
   assertInvariant(
-    rfq.status === "quoted",
+    rfq.status === "quoted" || rfq.status === "open",
     "RFQ_NOT_OPEN",
-    "Only quoted RFQs may transition into quote_expired.",
+    "Only open or quoted RFQs may transition into quote_expired.",
     { rfqId: rfq.rfqId, status: rfq.status }
   );
 
@@ -769,6 +1133,199 @@ export const markRfqQuoteExpired = (rfq: RFQSession, updatedAt: string): RFQSess
     ...rfq,
     status: "quote_expired",
     updatedAt: normalizeTimestamp(updatedAt, "updatedAt")
+  };
+};
+
+export const createDealerInvitations = (
+  input: CreateDealerInvitationsInput
+): CreateDealerInvitationsResult => {
+  assertPairActive(input.pair);
+  assertInvariant(
+    input.pair.mode === "ATSPair",
+    "PAIR_MODE_MISMATCH",
+    "Dealer invitations are only valid for ATSPair venues.",
+    { pairId: input.pair.pairId, mode: input.pair.mode }
+  );
+
+  const createdAt = normalizeTimestamp(input.createdAt, "createdAt");
+
+  assertInvariant(
+    isRfqResponseWindowOpen(input.rfq, createdAt),
+    "RESPONSE_WINDOW_EXPIRED",
+    "Dealer invitations may only be changed before the RFQ response window closes.",
+    {
+      pairId: input.pair.pairId,
+      responseWindowClosesAt: input.rfq.responseWindowClosesAt,
+      rfqId: input.rfq.rfqId
+    }
+  );
+
+  const requestedDealerIds = normalizeStringList(
+    input.dealerIds,
+    "INVALID_INVITE_SET",
+    "ATSPair RFQs must invite at least one dealer.",
+    "dealerIds"
+  );
+  const existingInvitations = input.invitations.filter(matchRfqInvitation(input.rfq));
+  const currentActiveDealerIds = uniqueSortedStrings(
+    existingInvitations
+      .filter((invitation) => invitation.status === "open" || invitation.status === "responded")
+      .map((invitation) => invitation.dealerId)
+  );
+
+  for (const dealerId of requestedDealerIds) {
+    ensureDealerBoundToPair(input.pair, dealerId);
+    assertInvariant(
+      hasEntitlement(dealerId, input.accessGrants, "respond_quote"),
+      "MISSING_ENTITLEMENT",
+      `Dealer ${dealerId} does not hold respond_quote permission for pair ${input.pair.pairId}.`,
+      {
+        dealerId,
+        pairId: input.pair.pairId
+      }
+    );
+  }
+
+  if (input.rfq.firstResponseAt !== undefined || input.pair.inviteRevisionPolicy === "locked") {
+    assertInvariant(
+      equalStringLists(currentActiveDealerIds, requestedDealerIds),
+      "INVITE_SET_LOCKED",
+      "The invite set cannot be changed after the first response or when policy locks it.",
+      {
+        currentActiveDealerIds,
+        requestedDealerIds,
+        rfqId: input.rfq.rfqId
+      }
+    );
+
+    return {
+      rfq: {
+        ...input.rfq,
+        invitedDealerIds: requestedDealerIds,
+        currentInvitationVersion: input.rfq.currentInvitationVersion ?? 1
+      },
+      invitations: existingInvitations
+    };
+  }
+
+  if (equalStringLists(currentActiveDealerIds, requestedDealerIds)) {
+    return {
+      rfq: {
+        ...input.rfq,
+        invitedDealerIds: requestedDealerIds,
+        currentInvitationVersion: input.rfq.currentInvitationVersion ?? 1
+      },
+      invitations: existingInvitations
+    };
+  }
+
+  const nextVersion = Math.max(input.rfq.currentInvitationVersion ?? 0, 0) + 1;
+  const retained = new Set(requestedDealerIds);
+  const updatedInvitations = existingInvitations.map((invitation) =>
+    invitation.status === "open" && !retained.has(invitation.dealerId)
+      ? {
+          ...invitation,
+          status: "withdrawn" as const,
+          updatedAt: createdAt,
+          withdrawnAt: createdAt,
+          withdrawnBy: assertNonEmpty(
+            input.invitedBy,
+            "EMPTY_IDENTIFIER",
+            "invitedBy is required.",
+            { field: "invitedBy" }
+          ),
+          withdrawalReason: "Removed from directed invite set."
+        }
+      : invitation
+  );
+  const existingDealerIds = new Set(updatedInvitations.map((invitation) => invitation.dealerId));
+  const newInvitations = requestedDealerIds
+    .filter((dealerId) => !existingDealerIds.has(dealerId))
+    .map<DealerInvitation>((dealerId) => ({
+      invitationId: `${input.rfq.rfqId}:${dealerId}:${nextVersion}`,
+      pairId: input.pair.pairId,
+      rfqId: input.rfq.rfqId,
+      dealerId,
+      subscriberId: input.rfq.subscriberId,
+      invitedAt: createdAt,
+      invitedBy: assertNonEmpty(input.invitedBy, "EMPTY_IDENTIFIER", "invitedBy is required.", {
+        field: "invitedBy"
+      }),
+      responseWindowClosesAt: normalizeTimestamp(
+        input.rfq.responseWindowClosesAt ?? "",
+        "responseWindowClosesAt"
+      ),
+      updatedAt: createdAt,
+      status: "open",
+      invitationVersion: nextVersion
+    }));
+
+  return {
+    rfq: {
+      ...input.rfq,
+      invitedDealerIds: requestedDealerIds,
+      currentInvitationVersion: nextVersion,
+      updatedAt: createdAt
+    },
+    invitations: [...updatedInvitations, ...newInvitations]
+  };
+};
+
+export const expireDealerInvitation = (
+  invitation: DealerInvitation,
+  observedAt: string
+): DealerInvitation => {
+  if (invitation.status !== "open") {
+    return invitation;
+  }
+
+  const observedAtMillis = toMillis(
+    normalizeTimestamp(observedAt, "observedAt"),
+    "INVALID_QUOTE_EXPIRY",
+    "observedAt"
+  );
+  const responseWindowMillis = toMillis(
+    invitation.responseWindowClosesAt,
+    "INVALID_QUOTE_EXPIRY",
+    "responseWindowClosesAt"
+  );
+
+  if (observedAtMillis < responseWindowMillis) {
+    return invitation;
+  }
+
+  return {
+    ...invitation,
+    status: "expired",
+    updatedAt: normalizeTimestamp(observedAt, "observedAt")
+  };
+};
+
+export const markDealerInvitationResponded = (
+  invitation: DealerInvitation,
+  respondedAt: string,
+  firstQuoteId?: string
+): DealerInvitation => {
+  if (invitation.status === "responded") {
+    return invitation;
+  }
+
+  assertInvariant(
+    invitation.status === "open",
+    "INVITATION_NOT_OPEN",
+    "Only open invitations may be marked as responded.",
+    {
+      invitationId: invitation.invitationId,
+      status: invitation.status
+    }
+  );
+
+  return {
+    ...invitation,
+    status: "responded",
+    respondedAt: normalizeTimestamp(respondedAt, "respondedAt"),
+    updatedAt: normalizeTimestamp(respondedAt, "respondedAt"),
+    ...(firstQuoteId !== undefined ? { firstQuoteId } : {})
   };
 };
 
@@ -785,22 +1342,68 @@ export const createDealerQuote = (input: CreateDealerQuoteInput): DealerQuote =>
     "The dealer does not hold respond_quote permission for this pair.",
     { dealerId, pairId: input.pair.pairId }
   );
+  ensureDealerBoundToPair(input.pair, dealerId);
+
+  const relevantQuotes = (input.existingQuotes ?? []).filter(matchRfqQuote(input.rfq));
+
   assertInvariant(
-    input.rfq.status === "open",
-    "RFQ_NOT_OPEN",
-    "Quotes may only be submitted against open RFQs.",
-    { rfqId: input.rfq.rfqId, status: input.rfq.status }
-  );
-  assertInvariant(
-    input.rfq.dealerId === dealerId && input.pair.dealerId === dealerId,
-    "RFQ_DEALER_MISMATCH",
-    "Quotes must come from the dealer bound to the pair and RFQ.",
+    !relevantQuotes.some((quote) => quote.dealerId === dealerId && quote.status === "open"),
+    "QUOTE_NOT_CURRENT",
+    "Dealers may only hold one active quote per RFQ. Use revise quote for replacements.",
     {
       dealerId,
-      pairDealerId: input.pair.dealerId,
-      rfqDealerId: input.rfq.dealerId
+      rfqId: input.rfq.rfqId
     }
   );
+
+  if (input.pair.mode === "SingleDealerPair") {
+    assertInvariant(
+      input.rfq.status === "open",
+      "RFQ_NOT_OPEN",
+      "Quotes may only be submitted against open RFQs.",
+      { rfqId: input.rfq.rfqId, status: input.rfq.status }
+    );
+    assertInvariant(
+      input.rfq.dealerId === dealerId && input.pair.dealerId === dealerId,
+      "RFQ_DEALER_MISMATCH",
+      "Quotes must come from the dealer bound to the pair and RFQ.",
+      {
+        dealerId,
+        pairDealerId: input.pair.dealerId,
+        rfqDealerId: input.rfq.dealerId
+      }
+    );
+  } else {
+    const invitations = (input.invitations ?? []).filter(matchRfqInvitation(input.rfq));
+
+    assertInvariant(
+      input.rfq.status !== "accepted" &&
+        input.rfq.status !== "cancelled" &&
+        input.rfq.status !== "rejected",
+      "RFQ_NOT_OPEN",
+      "Quotes may only be submitted against live RFQs.",
+      { rfqId: input.rfq.rfqId, status: input.rfq.status }
+    );
+    assertInvariant(
+      isRfqResponseWindowOpen(input.rfq, input.createdAt),
+      "RESPONSE_WINDOW_EXPIRED",
+      "Dealers may not submit or revise quotes after the response window closes.",
+      {
+        responseWindowClosesAt: input.rfq.responseWindowClosesAt,
+        rfqId: input.rfq.rfqId
+      }
+    );
+    assertInvariant(
+      activeInvitationForDealer(invitations, dealerId) !== undefined,
+      "INVITATION_REQUIRED",
+      "Only invited dealers may submit ATSPair RFQ quotes.",
+      {
+        dealerId,
+        rfqId: input.rfq.rfqId
+      }
+    );
+  }
+
   assertPositiveNumber(
     input.price,
     "INVALID_QUOTE_PRICE",
@@ -846,8 +1449,163 @@ export const createDealerQuote = (input: CreateDealerQuoteInput): DealerQuote =>
   };
 };
 
+export const createFirmQuote = createDealerQuote;
+
+export const reviseDealerQuote = (input: ReviseDealerQuoteInput): ReviseDealerQuoteResult => {
+  assertInvariant(
+    input.quote.dealerId === normalizeString(input.dealerId),
+    "RFQ_DEALER_MISMATCH",
+    "Only the quote owner may revise the quote.",
+    {
+      dealerId: input.dealerId,
+      quoteDealerId: input.quote.dealerId,
+      quoteId: input.quote.quoteId
+    }
+  );
+
+  if (input.quote.status === "withdrawn") {
+    throw createDomainError("QUOTE_WITHDRAWN", "Withdrawn quotes cannot be revised.", {
+      quoteId: input.quote.quoteId
+    });
+  }
+
+  if (input.quote.status === "stale") {
+    throw createDomainError("QUOTE_STALE", "Stale quotes cannot be revised.", {
+      quoteId: input.quote.quoteId
+    });
+  }
+
+  assertInvariant(
+    input.quote.status === "open",
+    "QUOTE_NOT_OPEN",
+    "Only open quotes may be revised.",
+    {
+      quoteId: input.quote.quoteId,
+      status: input.quote.status
+    }
+  );
+
+  const revisedAt = normalizeTimestamp(input.createdAt, "createdAt");
+  const nextQuote = createDealerQuote({
+    accessGrants: input.accessGrants,
+    createdAt: revisedAt,
+    dealerId: input.dealerId,
+    existingQuotes: (input.existingQuotes ?? []).filter(
+      (quote) => quote.quoteId !== input.quote.quoteId
+    ),
+    expiresAt: input.expiresAt,
+    pair: input.pair,
+    price: input.price,
+    quantity: input.quantity,
+    quoteId: input.quoteId,
+    rfq: input.rfq,
+    ...(input.invitations !== undefined ? { invitations: input.invitations } : {})
+  });
+  const previousQuote = {
+    ...markQuoteStale(input.quote, revisedAt, "revised", nextQuote.quoteId),
+    replacementQuoteId: nextQuote.quoteId
+  };
+
+  return {
+    previousQuote,
+    nextQuote: {
+      ...nextQuote,
+      previousQuoteId: input.quote.quoteId
+    },
+    revision: {
+      revisionId: assertNonEmpty(input.revisionId, "EMPTY_IDENTIFIER", "revisionId is required.", {
+        field: "revisionId"
+      }),
+      pairId: input.pair.pairId,
+      rfqId: input.rfq.rfqId,
+      dealerId: input.quote.dealerId,
+      subscriberId: input.rfq.subscriberId,
+      previousQuoteId: input.quote.quoteId,
+      nextQuoteId: nextQuote.quoteId,
+      revisedAt,
+      revisedBy: assertNonEmpty(input.dealerId, "EMPTY_IDENTIFIER", "dealerId is required.", {
+        field: "dealerId"
+      })
+    }
+  };
+};
+
+export const withdrawDealerQuote = (input: WithdrawDealerQuoteInput): WithdrawDealerQuoteResult => {
+  assertInvariant(
+    input.quote.dealerId === normalizeString(input.dealerId),
+    "RFQ_DEALER_MISMATCH",
+    "Only the quote owner may withdraw the quote.",
+    {
+      dealerId: input.dealerId,
+      quoteDealerId: input.quote.dealerId,
+      quoteId: input.quote.quoteId
+    }
+  );
+
+  if (input.quote.status === "withdrawn") {
+    return {
+      quote: input.quote
+    };
+  }
+
+  if (input.quote.status === "stale") {
+    throw createDomainError("QUOTE_STALE", "Stale quotes cannot be withdrawn.", {
+      quoteId: input.quote.quoteId
+    });
+  }
+
+  assertInvariant(
+    input.quote.status === "open",
+    "QUOTE_NOT_OPEN",
+    "Only open quotes may be withdrawn.",
+    {
+      quoteId: input.quote.quoteId,
+      status: input.quote.status
+    }
+  );
+
+  const withdrawnAt = normalizeTimestamp(input.withdrawnAt, "withdrawnAt");
+  const normalizedReason = normalizeOptionalNote(input.reason);
+
+  return {
+    quote: {
+      ...input.quote,
+      status: "withdrawn",
+      updatedAt: withdrawnAt,
+      withdrawnAt,
+      withdrawnBy: assertNonEmpty(input.dealerId, "EMPTY_IDENTIFIER", "dealerId is required.", {
+        field: "dealerId"
+      }),
+      ...(normalizedReason !== undefined ? { withdrawalReason: normalizedReason } : {})
+    },
+    withdrawal: {
+      withdrawalId: assertNonEmpty(
+        input.withdrawalId,
+        "EMPTY_IDENTIFIER",
+        "withdrawalId is required.",
+        { field: "withdrawalId" }
+      ),
+      pairId: input.pair.pairId,
+      rfqId: input.rfq.rfqId,
+      quoteId: input.quote.quoteId,
+      dealerId: input.quote.dealerId,
+      subscriberId: input.rfq.subscriberId,
+      withdrawnAt,
+      withdrawnBy: assertNonEmpty(input.dealerId, "EMPTY_IDENTIFIER", "dealerId is required.", {
+        field: "dealerId"
+      }),
+      ...(normalizedReason !== undefined ? { reason: normalizedReason } : {})
+    }
+  };
+};
+
 export const expireDealerQuote = (quote: DealerQuote, observedAt: string): DealerQuote => {
-  if (quote.status === "accepted" || quote.status === "expired") {
+  if (
+    quote.status === "accepted" ||
+    quote.status === "expired" ||
+    quote.status === "stale" ||
+    quote.status === "withdrawn"
+  ) {
     return quote;
   }
 
@@ -866,6 +1624,54 @@ export const expireDealerQuote = (quote: DealerQuote, observedAt: string): Deale
     ...quote,
     status: "expired",
     updatedAt: normalizeTimestamp(observedAt, "observedAt")
+  };
+};
+
+export const synchronizeRfqLifecycle = (
+  input: SynchronizeRfqLifecycleInput
+): SynchronizeRfqLifecycleResult => {
+  const observedAt = normalizeTimestamp(input.observedAt, "observedAt");
+  const invitations = (input.invitations ?? [])
+    .filter(matchRfqInvitation(input.rfq))
+    .map((invitation) => expireDealerInvitation(invitation, observedAt));
+  const quotes = (input.quotes ?? [])
+    .filter(matchRfqQuote(input.rfq))
+    .map((quote) => expireDealerQuote(quote, observedAt));
+
+  if (
+    input.rfq.status === "accepted" ||
+    input.rfq.status === "cancelled" ||
+    input.rfq.status === "rejected"
+  ) {
+    return {
+      rfq: input.rfq,
+      invitations,
+      quotes
+    };
+  }
+
+  const openQuotes = quotes.filter((quote) => quote.status === "open");
+  let status: RFQSessionStatus;
+
+  if (openQuotes.length > 0) {
+    status = "quoted";
+  } else if (input.pair.mode === "ATSPair") {
+    status = isRfqResponseWindowOpen(input.rfq, observedAt) ? "open" : "quote_expired";
+  } else {
+    status = input.rfq.status === "open" ? "open" : "quote_expired";
+  }
+
+  return {
+    rfq:
+      input.rfq.status === status
+        ? input.rfq
+        : {
+            ...input.rfq,
+            status,
+            updatedAt: observedAt
+          },
+    invitations,
+    quotes
   };
 };
 
@@ -900,6 +1706,20 @@ export const acceptDealerQuote = (input: AcceptDealerQuoteInput): AcceptDealerQu
       acceptedQuoteId: input.rfq.acceptedQuoteId
     }
   );
+
+  if (input.quote.status === "withdrawn") {
+    throw createDomainError("QUOTE_WITHDRAWN", "Withdrawn quotes cannot be accepted.", {
+      quoteId: input.quote.quoteId
+    });
+  }
+
+  if (input.quote.status === "stale") {
+    throw createDomainError("QUOTE_STALE", "Stale quotes cannot be accepted.", {
+      quoteId: input.quote.quoteId,
+      staleReason: input.quote.staleReason
+    });
+  }
+
   assertInvariant(
     input.quote.status === "open",
     "QUOTE_NOT_OPEN",
@@ -938,10 +1758,19 @@ export const acceptDealerQuote = (input: AcceptDealerQuoteInput): AcceptDealerQu
     acceptedBy,
     updatedAt: acceptedAt
   };
+  const staleQuotes = (input.otherQuotes ?? [])
+    .filter(
+      (candidate) =>
+        candidate.rfqId === input.rfq.rfqId &&
+        candidate.quoteId !== input.quote.quoteId &&
+        candidate.status === "open"
+    )
+    .map((candidate) => markQuoteStale(candidate, acceptedAt, "accepted_elsewhere"));
 
   return {
     rfq,
     quote,
+    staleQuotes,
     executionTicket: {
       executionId: assertNonEmpty(
         input.executionId,
@@ -980,6 +1809,90 @@ export const acceptDealerQuote = (input: AcceptDealerQuoteInput): AcceptDealerQu
     }
   };
 };
+
+export const rejectAllQuotes = (input: RejectAllQuotesInput): RejectAllQuotesResult => {
+  const rejectedBy = assertNonEmpty(
+    input.rejectedBy,
+    "EMPTY_IDENTIFIER",
+    "rejectedBy is required.",
+    { field: "rejectedBy" }
+  );
+  const rejectedAt = normalizeTimestamp(input.rejectedAt, "rejectedAt");
+  const normalizedReason = normalizeOptionalNote(input.reason);
+
+  assertInvariant(
+    hasEntitlement(rejectedBy, input.accessGrants, "accept_quote"),
+    "MISSING_ENTITLEMENT",
+    "The actor does not hold accept_quote permission for this pair.",
+    { rejectedBy, pairId: input.rfq.pairId }
+  );
+  assertInvariant(
+    input.rfq.subscriberId === rejectedBy,
+    "MISSING_ENTITLEMENT",
+    "Only the RFQ subscriber may reject all quotes.",
+    { rejectedBy, subscriberId: input.rfq.subscriberId }
+  );
+
+  if (input.rfq.status === "rejected") {
+    return {
+      rfq: input.rfq,
+      staleQuotes: []
+    };
+  }
+
+  assertInvariant(
+    input.rfq.status !== "accepted" && input.rfq.status !== "cancelled",
+    "RFQ_NOT_OPEN",
+    "Only live RFQs may reject all quotes.",
+    { rfqId: input.rfq.rfqId, status: input.rfq.status }
+  );
+
+  return {
+    rfq: {
+      ...input.rfq,
+      status: "rejected",
+      updatedAt: rejectedAt,
+      rejectedAt,
+      rejectedBy,
+      ...(normalizedReason !== undefined ? { rejectionReason: normalizedReason } : {})
+    },
+    staleQuotes: input.quotes
+      .filter((quote) => quote.rfqId === input.rfq.rfqId && quote.status === "open")
+      .map((quote) => markQuoteStale(quote, rejectedAt, "rejected_all"))
+  };
+};
+
+export const compareQuotePriority = (
+  side: RFQSide,
+  left: DealerQuote,
+  right: DealerQuote
+): number => {
+  if (left.price !== right.price) {
+    return side === "buy" ? left.price - right.price : right.price - left.price;
+  }
+
+  if (left.quantity !== right.quantity) {
+    return right.quantity - left.quantity;
+  }
+
+  if (left.createdAt !== right.createdAt) {
+    return left.createdAt.localeCompare(right.createdAt);
+  }
+
+  return left.quoteId.localeCompare(right.quoteId);
+};
+
+export const rankComparableQuotes = (
+  side: RFQSide,
+  quotes: readonly DealerQuote[]
+): readonly RankedQuote[] =>
+  [...quotes]
+    .filter((quote) => quote.status === "open" || quote.status === "accepted")
+    .sort((left, right) => compareQuotePriority(side, left, right))
+    .map((quote, index) => ({
+      quote,
+      rank: index + 1
+    }));
 
 export const progressSettlementInstruction = (
   instruction: SettlementInstruction,

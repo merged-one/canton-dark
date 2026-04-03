@@ -34,7 +34,10 @@ describe("venue-api", () => {
             "Rulebook releases",
             "Access grants",
             "RFQ sessions",
+            "Dealer invitations",
             "Dealer quotes",
+            "Quote revisions",
+            "Quote withdrawals",
             "Execution tickets",
             "Settlement instructions"
           ],
@@ -222,6 +225,269 @@ describe("venue-api", () => {
     expect((dealerView.body as { quotes: unknown[] }).quotes).toHaveLength(1);
     expect(auditTrail.status).toBe(200);
     expect((auditTrail.body as { entries: unknown[] }).entries.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("runs the ATSPair directed RFQ flow through memory-backed HTTP endpoints", async () => {
+    const api = await createVenueApiApp();
+
+    const pairReply = await api.handleRequest({
+      method: "POST",
+      url: "/pairs",
+      headers: {
+        "x-actor-id": "operator-ats"
+      },
+      body: {
+        mode: "ATSPair",
+        operatorId: "operator-ats",
+        dealerIds: ["dealer-alpha", "dealer-beta"],
+        operatorOversightRole: "blinded",
+        pairId: "pair-api-ats",
+        jurisdiction: "US",
+        rulebookVersion: "v2",
+        rulebookSummary: "ats launch"
+      }
+    });
+    const pair = pairReply.body as { pairId: string };
+
+    expect(pairReply.status).toBe(201);
+    expect(pair.pairId).toBe("pair-api-ats");
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${pair.pairId}/access`,
+        headers: {
+          "x-actor-id": "operator-ats"
+        },
+        body: {
+          subjectId: "subscriber-ats",
+          role: "subscriber"
+        }
+      })
+    ).toMatchObject({ status: 201 });
+
+    const rfqReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/rfqs`,
+      headers: {
+        "x-actor-id": "subscriber-ats"
+      },
+      body: {
+        instrumentId: "CUSIP-ATS-API",
+        side: "buy",
+        quantity: 20,
+        responseWindowClosesAt: "2026-04-02T00:10:00.000Z"
+      }
+    });
+    const rfq = rfqReply.body as { rfqId: string };
+
+    expect(rfqReply.status).toBe(201);
+
+    const inviteReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/rfqs/${rfq.rfqId}/invite-dealers`,
+      headers: {
+        "x-actor-id": "subscriber-ats"
+      },
+      body: {
+        dealerIds: ["dealer-alpha"]
+      }
+    });
+
+    expect(inviteReply.status).toBe(200);
+
+    const reviseInviteReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/rfqs/${rfq.rfqId}/revise-invite-set`,
+      headers: {
+        "x-actor-id": "subscriber-ats"
+      },
+      body: {
+        dealerIds: ["dealer-alpha", "dealer-beta"]
+      }
+    });
+
+    expect(reviseInviteReply.status).toBe(200);
+
+    const betaQuoteReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/rfqs/${rfq.rfqId}/quotes`,
+      headers: {
+        "x-actor-id": "dealer-beta"
+      },
+      body: {
+        price: 101,
+        quantity: 20,
+        expiresAt: "2026-04-02T00:20:00.000Z"
+      }
+    });
+    const betaQuote = (betaQuoteReply.body as { quote: { quoteId: string } }).quote;
+
+    expect(betaQuoteReply.status).toBe(201);
+
+    const alphaQuoteReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/rfqs/${rfq.rfqId}/quotes`,
+      headers: {
+        "x-actor-id": "dealer-alpha"
+      },
+      body: {
+        price: 99.5,
+        quantity: 20,
+        expiresAt: "2026-04-02T00:20:00.000Z"
+      }
+    });
+    const alphaQuote = (alphaQuoteReply.body as { quote: { quoteId: string } }).quote;
+
+    expect(alphaQuoteReply.status).toBe(201);
+
+    const revisedAlphaReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/quotes/${alphaQuote.quoteId}/revise`,
+      headers: {
+        "x-actor-id": "dealer-alpha"
+      },
+      body: {
+        price: 98.75,
+        quantity: 20,
+        expiresAt: "2026-04-02T00:20:00.000Z"
+      }
+    });
+    const revisedAlpha = revisedAlphaReply.body as { nextQuote: { quoteId: string } };
+
+    expect(revisedAlphaReply.status).toBe(200);
+
+    const withdrawReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/quotes/${betaQuote.quoteId}/withdraw`,
+      headers: {
+        "x-actor-id": "dealer-beta"
+      },
+      body: {
+        reason: "manual pullback"
+      }
+    });
+
+    expect(withdrawReply.status).toBe(200);
+
+    const ladderReply = await api.handleRequest({
+      method: "GET",
+      url: `/pairs/${pair.pairId}/rfqs/${rfq.rfqId}/quote-ladder`,
+      headers: {
+        "x-actor-id": "subscriber-ats"
+      }
+    });
+
+    expect(ladderReply.status).toBe(200);
+    expect(
+      (ladderReply.body as { quotes: { quoteId: string; rank?: number }[] }).quotes.find(
+        (quote) => quote.quoteId === revisedAlpha.nextQuote.quoteId
+      )
+    ).toMatchObject({
+      quoteId: revisedAlpha.nextQuote.quoteId,
+      rank: 1
+    });
+
+    const dealerHistoryReply = await api.handleRequest({
+      method: "GET",
+      url: `/pairs/${pair.pairId}/dealers/dealer-beta/history`,
+      headers: {
+        "x-actor-id": "dealer-beta"
+      }
+    });
+
+    expect(dealerHistoryReply.status).toBe(200);
+    expect((dealerHistoryReply.body as { withdrawals: unknown[] }).withdrawals).toHaveLength(1);
+
+    const acceptReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/quotes/${revisedAlpha.nextQuote.quoteId}/accept`,
+      headers: {
+        "x-actor-id": "subscriber-ats"
+      }
+    });
+
+    expect(acceptReply.status).toBe(200);
+
+    const oversightReply = await api.handleRequest({
+      method: "GET",
+      url: `/pairs/${pair.pairId}/views/operator-oversight`,
+      headers: {
+        "x-actor-id": "operator-ats"
+      }
+    });
+
+    expect(oversightReply.status).toBe(200);
+    expect((oversightReply.body as { oversightRole: string }).oversightRole).toBe("blinded");
+    expect((oversightReply.body as { quoteLadders: unknown[] }).quoteLadders).toEqual([]);
+    expect(
+      (oversightReply.body as { quotes: { quoteId: string; price: number | null }[] }).quotes
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          quoteId: revisedAlpha.nextQuote.quoteId,
+          price: 98.75
+        }),
+        expect.objectContaining({
+          quoteId: betaQuote.quoteId,
+          price: null
+        })
+      ])
+    );
+
+    const rejectAllRfqReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/rfqs`,
+      headers: {
+        "x-actor-id": "subscriber-ats"
+      },
+      body: {
+        instrumentId: "CUSIP-ATS-API-REJECT",
+        side: "sell",
+        quantity: 15,
+        responseWindowClosesAt: "2026-04-02T00:30:00.000Z"
+      }
+    });
+    const rejectAllRfq = rejectAllRfqReply.body as { rfqId: string };
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${pair.pairId}/rfqs/${rejectAllRfq.rfqId}/invite-dealers`,
+        headers: {
+          "x-actor-id": "subscriber-ats"
+        },
+        body: {
+          dealerIds: ["dealer-alpha"]
+        }
+      })
+    ).toMatchObject({ status: 200 });
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${pair.pairId}/rfqs/${rejectAllRfq.rfqId}/quotes`,
+        headers: {
+          "x-actor-id": "dealer-alpha"
+        },
+        body: {
+          price: 100.25,
+          quantity: 15,
+          expiresAt: "2026-04-02T00:35:00.000Z"
+        }
+      })
+    ).toMatchObject({ status: 201 });
+
+    const rejectAllReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pair.pairId}/rfqs/${rejectAllRfq.rfqId}/reject-all`,
+      headers: {
+        "x-actor-id": "subscriber-ats"
+      },
+      body: {}
+    });
+
+    expect(rejectAllReply.status).toBe(200);
+    expect((rejectAllReply.body as { rfq: { status: string } }).rfq.status).toBe("rejected");
   });
 
   it("serves demo status, reset, and clock controls through typed routes", async () => {
@@ -527,6 +793,8 @@ describe("venue-api", () => {
         rfqId,
         pairId: "pair-preseeded",
         dealerId: "dealer-zeta",
+        invitedDealerIds: ["dealer-zeta"],
+        currentInvitationVersion: 1,
         subscriberId: "subscriber-9",
         instrumentId: "CUSIP-9",
         side: "buy",
@@ -569,6 +837,8 @@ describe("venue-api", () => {
         rfqId: thirdRfqId,
         pairId: "pair-preseeded",
         dealerId: "dealer-zeta",
+        invitedDealerIds: ["dealer-zeta"],
+        currentInvitationVersion: 1,
         subscriberId: "subscriber-9",
         instrumentId: "CUSIP-11",
         side: "buy",
@@ -609,6 +879,8 @@ describe("venue-api", () => {
         rfqId: secondRfqId,
         pairId: "pair-preseeded",
         dealerId: "dealer-zeta",
+        invitedDealerIds: ["dealer-zeta"],
+        currentInvitationVersion: 1,
         subscriberId: "subscriber-9",
         instrumentId: "CUSIP-10",
         side: "sell",
@@ -628,6 +900,40 @@ describe("venue-api", () => {
         headers: {
           "x-actor-id": "subscriber-9"
         }
+      })
+    ).toEqual({
+      status: 404,
+      body: {
+        message: "Quote missing was not found."
+      }
+    });
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${pair.pairId}/quotes/missing/revise`,
+        headers: {
+          "x-actor-id": "dealer-zeta"
+        },
+        body: {
+          price: 100,
+          quantity: 3,
+          expiresAt: "2026-04-02T00:10:00.000Z"
+        }
+      })
+    ).toEqual({
+      status: 404,
+      body: {
+        message: "Quote missing was not found."
+      }
+    });
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${pair.pairId}/quotes/missing/withdraw`,
+        headers: {
+          "x-actor-id": "dealer-zeta"
+        },
+        body: {}
       })
     ).toEqual({
       status: 404,

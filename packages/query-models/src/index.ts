@@ -1,11 +1,17 @@
 import {
   isGrantActive,
+  listPairDealerIds,
+  quoteTieBreakRule,
+  rankComparableQuotes,
   resolveEntitlements,
   type AccessGrant,
   type AuditRecord,
+  type DealerInvitation,
   type DealerQuote,
   type ExecutionTicket,
   type PairInstance,
+  type QuoteRevision,
+  type QuoteWithdrawal,
   type SettlementInstruction,
   type RFQSession
 } from "@canton-dark/domain-core";
@@ -79,6 +85,81 @@ export type DealerQuoteView = Pick<
   | "subscriberId"
 >;
 
+export type DealerInvitationView = Pick<
+  DealerInvitation,
+  | "dealerId"
+  | "invitationId"
+  | "invitationVersion"
+  | "invitedAt"
+  | "invitedBy"
+  | "responseWindowClosesAt"
+  | "respondedAt"
+  | "rfqId"
+  | "status"
+  | "subscriberId"
+  | "withdrawnAt"
+  | "withdrawnBy"
+  | "withdrawalReason"
+>;
+
+export type QuoteRevisionView = QuoteRevision;
+export type QuoteWithdrawalView = QuoteWithdrawal;
+
+export type QuoteComparisonItemView = {
+  comparable: boolean;
+  createdAt: string;
+  dealerId: string;
+  expiresAt: string;
+  price: number;
+  quantity: number;
+  quoteId: string;
+  rank?: number;
+  rfqId: string;
+  status: DealerQuote["status"];
+};
+
+export type QuoteComparisonView = {
+  pairId: string;
+  quotes: readonly QuoteComparisonItemView[];
+  rfqId: string;
+  side: RFQSession["side"];
+  subscriberId: string;
+  tieBreakRule: string;
+};
+
+export type DealerInvitationHistoryView = {
+  dealerId: string;
+  invitations: readonly DealerInvitationView[];
+  pair: PairSummaryView;
+  quotes: readonly DealerQuoteView[];
+  revisions: readonly QuoteRevisionView[];
+  withdrawals: readonly QuoteWithdrawalView[];
+};
+
+export type OperatorOversightQuoteView = {
+  createdAt: string;
+  dealerId: string;
+  expiresAt: string;
+  price: number | null;
+  quantity: number | null;
+  quoteId: string;
+  rfqId: string;
+  status: DealerQuote["status"];
+  subscriberId: string;
+};
+
+export type OperatorOversightView = {
+  audits: readonly AuditTrailEntryView[];
+  invitations: readonly DealerInvitationView[];
+  oversightRole: PairInstance["operatorOversightRole"];
+  pair: PairSummaryView;
+  quoteLadders: readonly QuoteComparisonView[];
+  quotes: readonly OperatorOversightQuoteView[];
+  revisions: readonly QuoteRevisionView[];
+  rfqs: readonly RFQSessionView[];
+  withdrawals: readonly QuoteWithdrawalView[];
+};
+
 export type ExecutionTicketView = ExecutionTicket;
 
 export type SettlementInstructionView = Pick<
@@ -127,7 +208,10 @@ const onLedgerFacts = [
   "Rulebook releases",
   "Access grants",
   "RFQ sessions",
+  "Dealer invitations",
   "Dealer quotes",
+  "Quote revisions",
+  "Quote withdrawals",
   "Execution tickets",
   "Settlement instructions"
 ] as const;
@@ -146,6 +230,19 @@ const sortByCreatedAt = <T extends { createdAt: string }>(left: T, right: T) =>
   left.createdAt === right.createdAt
     ? JSON.stringify(left).localeCompare(JSON.stringify(right))
     : left.createdAt.localeCompare(right.createdAt);
+
+const sortByInvitedAt = (left: DealerInvitation, right: DealerInvitation) =>
+  `${left.invitedAt}:${left.invitationId}`.localeCompare(
+    `${right.invitedAt}:${right.invitationId}`
+  );
+
+const sortByRevisionAt = (left: QuoteRevision, right: QuoteRevision) =>
+  `${left.revisedAt}:${left.revisionId}`.localeCompare(`${right.revisedAt}:${right.revisionId}`);
+
+const sortByWithdrawalAt = (left: QuoteWithdrawal, right: QuoteWithdrawal) =>
+  `${left.withdrawnAt}:${left.withdrawalId}`.localeCompare(
+    `${right.withdrawnAt}:${right.withdrawalId}`
+  );
 
 const sortByAcceptedAt = (left: ExecutionTicket, right: ExecutionTicket) =>
   left.acceptedAt === right.acceptedAt
@@ -179,6 +276,24 @@ const projectQuote = (quote: DealerQuote): DealerQuoteView => ({
   expiresAt: quote.expiresAt,
   status: quote.status,
   createdAt: quote.createdAt
+});
+
+const projectInvitation = (invitation: DealerInvitation): DealerInvitationView => ({
+  invitationId: invitation.invitationId,
+  rfqId: invitation.rfqId,
+  dealerId: invitation.dealerId,
+  subscriberId: invitation.subscriberId,
+  invitationVersion: invitation.invitationVersion,
+  invitedAt: invitation.invitedAt,
+  invitedBy: invitation.invitedBy,
+  responseWindowClosesAt: invitation.responseWindowClosesAt,
+  status: invitation.status,
+  ...(invitation.respondedAt !== undefined ? { respondedAt: invitation.respondedAt } : {}),
+  ...(invitation.withdrawnAt !== undefined ? { withdrawnAt: invitation.withdrawnAt } : {}),
+  ...(invitation.withdrawnBy !== undefined ? { withdrawnBy: invitation.withdrawnBy } : {}),
+  ...(invitation.withdrawalReason !== undefined
+    ? { withdrawalReason: invitation.withdrawalReason }
+    : {})
 });
 
 const projectExecution = (execution: ExecutionTicket): ExecutionTicketView => execution;
@@ -238,6 +353,8 @@ export const projectVenueHealth = (
   ];
   const status: VenueStatus =
     violations.length > 0 ? "rejected" : pair.pauseState.state === "paused" ? "paused" : "healthy";
+  const activeParticipants = projectParticipantAccess(pair.pairId, grants).participants.length;
+  const dealers = listPairDealerIds(pair);
 
   return {
     title: `${pair.mode} health`,
@@ -247,15 +364,17 @@ export const projectVenueHealth = (
         ? `${violations.length} venue policy issue(s) require remediation before new trading activity.`
         : pair.pauseState.state === "paused"
           ? `Pair paused by ${pair.pauseState.changedBy}: ${pair.pauseState.reason}.`
-          : `Operator ${pair.operatorId} oversees dealer ${pair.dealerId} with ${projectParticipantAccess(pair.pairId, grants).participants.length} active participant grant(s).`,
+          : pair.mode === "SingleDealerPair"
+            ? `Operator ${pair.operatorId} oversees dealer ${pair.dealerId} with ${activeParticipants} active participant grant(s).`
+            : `Operator ${pair.operatorId} oversees ${dealers.length} directed dealers with ${activeParticipants} active participant grant(s).`,
     summary: {
       pairId: pair.pairId,
       mode: pair.mode,
       operatorId: pair.operatorId,
-      dealers: [pair.dealerId],
+      dealers,
       paused: pair.pauseState.state === "paused",
       rulebookVersion: pair.rulebookRelease.version,
-      activeParticipantCount: projectParticipantAccess(pair.pairId, grants).participants.length,
+      activeParticipantCount: activeParticipants,
       ledgerFacts: onLedgerFacts,
       offLedgerFacts
     },
@@ -330,7 +449,9 @@ export const projectDealerWorkbenchView = (input: {
   pair: projectPairSummary(input.pair),
   dealerId: input.dealerId,
   rfqs: input.rfqs
-    .filter((rfq) => rfq.dealerId === input.dealerId)
+    .filter(
+      (rfq) => rfq.dealerId === input.dealerId || rfq.invitedDealerIds?.includes(input.dealerId)
+    )
     .sort(sortByCreatedAt)
     .map(projectRfq),
   quotes: input.quotes
@@ -342,6 +463,130 @@ export const projectDealerWorkbenchView = (input: {
     .sort(sortByAcceptedAt)
     .map(projectExecution)
 });
+
+export const projectSubscriberQuoteLadder = (input: {
+  pair: PairInstance;
+  quotes: readonly DealerQuote[];
+  rfq: RFQSession;
+}): QuoteComparisonView => {
+  const relevantQuotes = input.quotes
+    .filter(
+      (quote) => quote.rfqId === input.rfq.rfqId && quote.subscriberId === input.rfq.subscriberId
+    )
+    .sort(sortByCreatedAt);
+  const rankMap = new Map(
+    rankComparableQuotes(input.rfq.side, relevantQuotes).map((entry) => [
+      entry.quote.quoteId,
+      entry.rank
+    ])
+  );
+
+  return {
+    pairId: input.pair.pairId,
+    rfqId: input.rfq.rfqId,
+    subscriberId: input.rfq.subscriberId,
+    side: input.rfq.side,
+    tieBreakRule: quoteTieBreakRule,
+    quotes: relevantQuotes.map((quote) => {
+      const rank = rankMap.get(quote.quoteId);
+
+      return {
+        quoteId: quote.quoteId,
+        rfqId: quote.rfqId,
+        dealerId: quote.dealerId,
+        price: quote.price,
+        quantity: quote.quantity,
+        expiresAt: quote.expiresAt,
+        status: quote.status,
+        createdAt: quote.createdAt,
+        comparable: rank !== undefined,
+        ...(rank !== undefined ? { rank } : {})
+      };
+    })
+  };
+};
+
+export const projectDealerInvitationHistory = (input: {
+  dealerId: string;
+  invitations: readonly DealerInvitation[];
+  pair: PairInstance;
+  quotes: readonly DealerQuote[];
+  revisions: readonly QuoteRevision[];
+  withdrawals: readonly QuoteWithdrawal[];
+}): DealerInvitationHistoryView => ({
+  pair: projectPairSummary(input.pair),
+  dealerId: input.dealerId,
+  invitations: input.invitations
+    .filter((invitation) => invitation.dealerId === input.dealerId)
+    .sort(sortByInvitedAt)
+    .map(projectInvitation),
+  quotes: input.quotes
+    .filter((quote) => quote.dealerId === input.dealerId)
+    .sort(sortByCreatedAt)
+    .map(projectQuote),
+  revisions: input.revisions
+    .filter((revision) => revision.dealerId === input.dealerId)
+    .sort(sortByRevisionAt),
+  withdrawals: input.withdrawals
+    .filter((withdrawal) => withdrawal.dealerId === input.dealerId)
+    .sort(sortByWithdrawalAt)
+});
+
+export const projectOperatorOversightView = (input: {
+  auditEntries: readonly AuditRecord[];
+  invitations: readonly DealerInvitation[];
+  pair: PairInstance;
+  quotes: readonly DealerQuote[];
+  revisions: readonly QuoteRevision[];
+  rfqs: readonly RFQSession[];
+  withdrawals: readonly QuoteWithdrawal[];
+}): OperatorOversightView => {
+  const ladders =
+    input.pair.mode === "ATSPair" && input.pair.operatorOversightRole === "blinded"
+      ? []
+      : input.rfqs
+          .filter((rfq) => rfq.subscriberId !== "")
+          .sort(sortByCreatedAt)
+          .map((rfq) =>
+            projectSubscriberQuoteLadder({
+              pair: input.pair,
+              rfq,
+              quotes: input.quotes
+            })
+          );
+
+  return {
+    pair: projectPairSummary(input.pair),
+    oversightRole: input.pair.operatorOversightRole,
+    rfqs: [...input.rfqs].sort(sortByCreatedAt).map(projectRfq),
+    invitations: [...input.invitations].sort(sortByInvitedAt).map(projectInvitation),
+    quotes: [...input.quotes].sort(sortByCreatedAt).map((quote) => ({
+      quoteId: quote.quoteId,
+      rfqId: quote.rfqId,
+      dealerId: quote.dealerId,
+      subscriberId: quote.subscriberId,
+      expiresAt: quote.expiresAt,
+      status: quote.status,
+      createdAt: quote.createdAt,
+      price:
+        input.pair.mode === "ATSPair" &&
+        input.pair.operatorOversightRole === "blinded" &&
+        quote.status !== "accepted"
+          ? null
+          : quote.price,
+      quantity:
+        input.pair.mode === "ATSPair" &&
+        input.pair.operatorOversightRole === "blinded" &&
+        quote.status !== "accepted"
+          ? null
+          : quote.quantity
+    })),
+    quoteLadders: ladders,
+    revisions: [...input.revisions].sort(sortByRevisionAt),
+    withdrawals: [...input.withdrawals].sort(sortByWithdrawalAt),
+    audits: projectAuditTrail(input.pair.pairId, input.auditEntries).entries
+  };
+};
 
 export const projectAuditTrail = (
   pairId: string,

@@ -8,9 +8,12 @@ import {
 import type {
   AccessGrant,
   AuditRecord,
+  DealerInvitation,
   DealerQuote,
   ExecutionTicket,
   PairInstance,
+  QuoteRevision,
+  QuoteWithdrawal,
   RFQSession,
   SettlementInstruction
 } from "@canton-dark/domain-core";
@@ -28,7 +31,10 @@ export type InMemoryLedgerPort = LedgerPort & {
   snapshot: () => {
     accessGrants: AccessGrant[];
     executions: ExecutionTicket[];
+    invitations: DealerInvitation[];
     pairs: PairInstance[];
+    quoteRevisions: QuoteRevision[];
+    quoteWithdrawals: QuoteWithdrawal[];
     quotes: DealerQuote[];
     rfqs: RFQSession[];
     settlements: SettlementInstruction[];
@@ -88,6 +94,9 @@ export const createInMemoryLedgerPort = (): InMemoryLedgerPort => {
   const accessGrants = new Map<string, AccessGrant[]>();
   const rfqs = new Map<string, RFQSession>();
   const quotes = new Map<string, DealerQuote>();
+  const invitations = new Map<string, DealerInvitation>();
+  const quoteRevisions = new Map<string, QuoteRevision>();
+  const quoteWithdrawals = new Map<string, QuoteWithdrawal>();
   const executions = new Map<string, ExecutionTicket>();
   const settlements = new Map<string, SettlementInstruction>();
 
@@ -113,8 +122,19 @@ export const createInMemoryLedgerPort = (): InMemoryLedgerPort => {
     async listExecutionTickets(pairId) {
       return clone([...executions.values()].filter((execution) => execution.pairId === pairId));
     },
+    async listInvitations(pairId) {
+      return clone([...invitations.values()].filter((invitation) => invitation.pairId === pairId));
+    },
     async listPairs() {
       return clone([...pairs.values()]);
+    },
+    async listQuoteRevisions(pairId) {
+      return clone([...quoteRevisions.values()].filter((revision) => revision.pairId === pairId));
+    },
+    async listQuoteWithdrawals(pairId) {
+      return clone(
+        [...quoteWithdrawals.values()].filter((withdrawal) => withdrawal.pairId === pairId)
+      );
     },
     async listQuotes(pairId) {
       return clone([...quotes.values()].filter((quote) => quote.pairId === pairId));
@@ -131,11 +151,20 @@ export const createInMemoryLedgerPort = (): InMemoryLedgerPort => {
     async saveExecutionTicket(execution) {
       executions.set(execution.executionId, clone(execution));
     },
+    async saveInvitation(invitation) {
+      invitations.set(invitation.invitationId, clone(invitation));
+    },
     async savePair(pair) {
       pairs.set(pair.pairId, clone(pair));
     },
     async saveQuote(quote) {
       quotes.set(quote.quoteId, clone(quote));
+    },
+    async saveQuoteRevision(revision) {
+      quoteRevisions.set(revision.revisionId, clone(revision));
+    },
+    async saveQuoteWithdrawal(withdrawal) {
+      quoteWithdrawals.set(withdrawal.withdrawalId, clone(withdrawal));
     },
     async saveRfq(rfq) {
       rfqs.set(rfq.rfqId, clone(rfq));
@@ -148,6 +177,9 @@ export const createInMemoryLedgerPort = (): InMemoryLedgerPort => {
       accessGrants: clone([...accessGrants.values()].flat()),
       rfqs: clone([...rfqs.values()]),
       quotes: clone([...quotes.values()]),
+      invitations: clone([...invitations.values()]),
+      quoteRevisions: clone([...quoteRevisions.values()]),
+      quoteWithdrawals: clone([...quoteWithdrawals.values()]),
       executions: clone([...executions.values()]),
       settlements: clone([...settlements.values()])
     })

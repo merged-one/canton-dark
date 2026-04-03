@@ -2,7 +2,19 @@ module CantonDark.Core.Types where
 
 import DA.List (elem, nub, sort)
 
-data PairMode = SingleDealerPair
+data PairMode
+  = ATSPair
+  | SingleDealerPair
+  deriving (Eq, Ord, Show)
+
+data OperatorOversightRole
+  = OversightBlinded
+  | OversightFull
+  deriving (Eq, Ord, Show)
+
+data InviteRevisionPolicy
+  = InviteSetBeforeFirstResponse
+  | InviteSetLocked
   deriving (Eq, Ord, Show)
 
 data ParticipantRole
@@ -46,7 +58,19 @@ data RFQStatus
   | RfqRejected
   deriving (Eq, Ord, Show)
 
-data QuoteStatus = QuoteAccepted | QuoteExpired | QuoteOpen
+data DealerInvitationStatus
+  = InvitationExpired
+  | InvitationOpen
+  | InvitationResponded
+  | InvitationWithdrawn
+  deriving (Eq, Ord, Show)
+
+data QuoteStatus
+  = QuoteAccepted
+  | QuoteExpired
+  | QuoteOpen
+  | QuoteStale
+  | QuoteWithdrawn
   deriving (Eq, Ord, Show)
 
 data SettlementStatus
@@ -88,6 +112,34 @@ data PauseStateData = PauseStateData with
 
 uniqueSorted : Ord a => [a] -> [a]
 uniqueSorted values = nub (sort values)
+
+operatorObservers : OperatorOversightRole -> Party -> [Party]
+operatorObservers oversightRole operator =
+  case oversightRole of
+    OversightBlinded -> []
+    OversightFull -> [operator]
+
+inviteSetCanChange : InviteRevisionPolicy -> Optional Time -> Bool
+inviteSetCanChange revisionPolicy firstResponseAt =
+  case revisionPolicy of
+    InviteSetBeforeFirstResponse ->
+      case firstResponseAt of
+        None -> True
+        Some _ -> False
+    InviteSetLocked -> False
+
+quoteStatusComparable : QuoteStatus -> Bool
+quoteStatusComparable quoteStatus =
+  case quoteStatus of
+    QuoteAccepted -> True
+    QuoteOpen -> True
+    QuoteExpired -> False
+    QuoteStale -> False
+    QuoteWithdrawn -> False
+
+quoteTieBreakRule : Text
+quoteTieBreakRule =
+  "Best price, then larger quantity, then earliest quote creation time, then lexicographic quote id."
 
 defaultEntitlements : ParticipantRole -> [Entitlement]
 defaultEntitlements role =
