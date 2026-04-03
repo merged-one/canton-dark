@@ -363,6 +363,7 @@ describe("query-model projectors", () => {
         subscriberId: "subscriber-1"
       })
     ).toEqual({
+      availableDealerIds: ["dealer-alpha"],
       pair: projectPairSummary(pair),
       subscriberId: "subscriber-1",
       entitlements: ["accept_quote", "submit_rfq", "view_pair"],
@@ -580,6 +581,7 @@ describe("query-model projectors", () => {
         subscriberId: "subscriber-2"
       })
     ).toEqual({
+      availableDealerIds: ["dealer-alpha"],
       pair: projectPairSummary(pair),
       subscriberId: "subscriber-2",
       entitlements: [],
@@ -869,6 +871,7 @@ describe("query-model projectors", () => {
       reason: "manual pullback"
     };
     const ladder = projectSubscriberQuoteLadder({
+      invitations,
       pair: atsPair,
       quotes: [betaQuote, alphaQuote],
       rfq: atsRfq
@@ -892,17 +895,45 @@ describe("query-model projectors", () => {
           pairId: atsPair.pairId
         }
       ],
+      executions: [],
+      grants: atsGrants,
       invitations,
       pair: atsPair,
       quotes: [betaQuote, alphaQuote],
       revisions: [revision],
       rfqs: [atsRfq],
+      settlements: [],
       withdrawals: [withdrawal]
     });
 
     expect(ladder).toEqual({
+      invitations: [
+        {
+          invitationId: "rfq-ats-1:dealer-alpha:1",
+          rfqId: atsRfq.rfqId,
+          dealerId: "dealer-alpha",
+          subscriberId: "subscriber-1",
+          invitationVersion: 1,
+          invitedAt: "2026-04-02T00:01:30.000Z",
+          invitedBy: "subscriber-1",
+          responseWindowClosesAt: "2026-04-02T00:10:00.000Z",
+          status: "open"
+        },
+        {
+          invitationId: "rfq-ats-1:dealer-beta:1",
+          rfqId: atsRfq.rfqId,
+          dealerId: "dealer-beta",
+          subscriberId: "subscriber-1",
+          invitationVersion: 1,
+          invitedAt: "2026-04-02T00:01:30.000Z",
+          invitedBy: "subscriber-1",
+          responseWindowClosesAt: "2026-04-02T00:10:00.000Z",
+          status: "open"
+        }
+      ],
       pairId: atsPair.pairId,
       rfqId: atsRfq.rfqId,
+      responseWindowClosesAt: "2026-04-02T00:10:00.000Z",
       subscriberId: "subscriber-1",
       side: "buy",
       tieBreakRule:
@@ -966,7 +997,13 @@ describe("query-model projectors", () => {
       withdrawals: []
     });
     expect(oversight.oversightRole).toBe("blinded");
+    expect(oversight.access.participants).toHaveLength(4);
+    expect(oversight.dealerUniverse).toEqual(["dealer-alpha", "dealer-beta"]);
+    expect(oversight.health.status).toBe("healthy");
+    expect(oversight.inviteRevisionPolicy).toBe("before_first_response");
     expect(oversight.quoteLadders).toEqual([]);
+    expect(oversight.executions).toEqual([]);
+    expect(oversight.settlements).toEqual([]);
     expect(oversight.quotes).toEqual([
       {
         quoteId: "quote-ats-alpha",
@@ -1133,6 +1170,8 @@ describe("query-model projectors", () => {
     ];
     const oversight = projectOperatorOversightView({
       auditEntries: [],
+      executions: [],
+      grants,
       invitations,
       pair: fullPair,
       quotes,
@@ -1172,6 +1211,7 @@ describe("query-model projectors", () => {
         }
       ],
       rfqs: [rfq],
+      settlements: [],
       withdrawals: [
         {
           withdrawalId: "withdrawal-b",
@@ -1238,13 +1278,21 @@ describe("query-model projectors", () => {
     });
     expect(oversight.quoteLadders).toHaveLength(1);
     expect(oversight.quoteLadders[0]).toMatchObject({
+      invitations: [
+        expect.objectContaining({ dealerId: "dealer-alpha" }),
+        expect.objectContaining({ dealerId: "dealer-beta" })
+      ],
       rfqId: rfq.rfqId,
+      responseWindowClosesAt: "2026-04-02T00:10:00.000Z",
       side: "sell",
       quotes: [
         expect.objectContaining({ quoteId: "quote-full-1", rank: 1 }),
         expect.objectContaining({ quoteId: "quote-full-2", rank: 2 })
       ]
     });
+    expect(oversight.access.participants).toHaveLength(4);
+    expect(oversight.health.status).toBe("healthy");
+    expect(oversight.dealerUniverse).toEqual(["dealer-alpha", "dealer-beta"]);
     expect(oversight.revisions.map((revision) => revision.revisionId)).toEqual([
       "revision-a",
       "revision-b",

@@ -223,6 +223,40 @@ export const appChromeStyles = `
     resize: vertical;
   }
 
+  fieldset {
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  legend {
+    margin-bottom: 8px;
+    color: var(--ink-soft);
+  }
+
+  .choice-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+  }
+
+  .choice-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 244, 222, 0.12);
+    border-radius: 14px;
+    background: rgba(255, 244, 222, 0.06);
+    color: var(--ink-soft);
+  }
+
+  .choice-item input {
+    width: auto;
+    margin: 0;
+  }
+
   .actions {
     display: flex;
     flex-wrap: wrap;

@@ -3,16 +3,19 @@ import { createMemoryVenueEnvironment } from "@canton-dark/adapters-memory";
 
 import {
   createPhase1DemoSteps,
+  createPhase2DemoSteps,
   createDeterministicScheduler,
   createScenarioRecorder,
   createSeededRandom,
   parseReplayFile,
   persona,
   phase1DemoDefaults,
+  phase2DemoDefaults,
   replayScenario,
   runPhase1DemoScenario,
   runScenario,
   seedPhase1DemoEnvironment,
+  seedPhase2DemoEnvironment,
   serializeReplayFile
 } from "./index";
 
@@ -130,6 +133,7 @@ describe("sim-harness", () => {
             alias: "pair",
             operatorId: "operator-demo",
             dealerId: "dealer-alpha",
+            dealerIds: ["dealer-alpha"],
             jurisdiction: "US",
             pairId: "pair-phase1-demo",
             rulebookVersion: "v1",
@@ -345,10 +349,34 @@ describe("sim-harness", () => {
     expect(seeded.pairId).toBe(phase1DemoDefaults.pairId);
     expect(seeded.operatorId).toBe(phase1DemoDefaults.operatorId);
     expect(seeded.dealerId).toBe(phase1DemoDefaults.dealerId);
+    expect(seeded.dealerIds).toEqual(phase1DemoDefaults.dealerIds);
     expect(seeded.subscriberId).toBe(phase1DemoDefaults.subscriberId);
     expect(seeded.replay.outputs).toContainEqual({
       alias: "pair",
       id: phase1DemoDefaults.pairId,
+      type: "pair"
+    });
+  });
+
+  it("builds deterministic phase 2 demo steps and seed metadata", async () => {
+    const environment = createMemoryVenueEnvironment();
+
+    expect(createPhase2DemoSteps("phase2-ready")).toHaveLength(5);
+
+    const seeded = await seedPhase2DemoEnvironment(environment, {
+      mode: "phase2-ready",
+      seed: 34
+    });
+
+    expect(seeded.mode).toBe("phase2-ready");
+    expect(seeded.pairId).toBe(phase2DemoDefaults.pairId);
+    expect(seeded.operatorId).toBe(phase2DemoDefaults.operatorId);
+    expect(seeded.dealerId).toBe(phase2DemoDefaults.dealerId);
+    expect(seeded.dealerIds).toEqual(phase2DemoDefaults.dealerIds);
+    expect(seeded.subscriberId).toBe(phase2DemoDefaults.subscriberId);
+    expect(seeded.replay.outputs).toContainEqual({
+      alias: "pair",
+      id: phase2DemoDefaults.pairId,
       type: "pair"
     });
   });

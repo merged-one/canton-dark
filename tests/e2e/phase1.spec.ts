@@ -67,23 +67,23 @@ test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", a
   await accessibilitySmoke(subscriberPage);
 
   await dealerPage.goto(`${urls.dealer}/?pairId=${pairId}`);
-  await expect(dealerPage.getByTestId("dealer-quote-screen")).toContainText("rfq-");
+  await expect(dealerPage.getByTestId("dealer-invitation-detail")).toContainText("rfq-");
   await accessibilitySmoke(dealerPage);
-  await expect(dealerPage.getByTestId("dealer-quote-screen")).toHaveScreenshot(
+  await expect(dealerPage.getByTestId("dealer-invitation-detail")).toHaveScreenshot(
     "dealer-quote-screen.png"
   );
   await dealerPage
     .locator("[data-testid='dealer-quote-form']")
     .getByRole("button", { name: "Submit quote" })
     .click();
-  await expect(dealerPage.getByTestId("dealer-notice")).toContainText("Submitted quote");
+  await expect(dealerPage.getByTestId("dealer-notice")).toContainText("Dealer quote updated.");
 
   await subscriberPage
     .locator("[data-testid='subscriber-pair-form']")
     .getByRole("button", { name: "Refresh" })
     .click();
-  await expect(subscriberPage.getByTestId("subscriber-rfq-screen")).toContainText("quote-");
-  await expect(subscriberPage.getByTestId("subscriber-rfq-screen")).toHaveScreenshot(
+  await expect(subscriberPage.getByTestId("subscriber-compare-screen")).toContainText("quote-");
+  await expect(subscriberPage.getByTestId("subscriber-compare-screen")).toHaveScreenshot(
     "subscriber-rfq-screen.png"
   );
   await subscriberPage.getByRole("button", { name: "Accept quote" }).first().click();
@@ -100,13 +100,15 @@ test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", a
     .locator("[data-testid='dealer-pair-form']")
     .getByRole("button", { name: "Refresh" })
     .click();
-  await expect(dealerPage.getByTestId("dealer-quote-screen")).toContainText("execution-");
+  await expect(dealerPage.getByTestId("dealer-invitation-detail")).toContainText("execution-");
 
   await subscriberPage
     .locator("[data-testid='subscriber-pair-form']")
     .getByRole("button", { name: "Refresh" })
     .click();
-  await expect(subscriberPage.getByTestId("subscriber-rfq-screen")).toContainText("settlement-");
+  await expect(subscriberPage.getByTestId("subscriber-compare-screen")).toContainText(
+    "settlement-"
+  );
 
   await operatorContext.close();
   await subscriberContext.close();

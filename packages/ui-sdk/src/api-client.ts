@@ -1,8 +1,11 @@
 import {
   parseAuditTrailView,
   parseDealerWorkbenchView,
+  parseDealerInvitationHistoryView,
   parseDemoStatusResponse,
+  parseOperatorOversightView,
   parseOperatorView,
+  parseQuoteComparisonView,
   parseSubscriberView,
   type CreatePairRequest,
   type DemoResetRequest,
@@ -15,8 +18,11 @@ import {
 } from "@canton-dark/api-contracts";
 import type {
   AuditTrailView,
+  DealerInvitationHistoryView,
   DealerWorkbenchView,
+  OperatorOversightView,
   OperatorView,
+  QuoteComparisonView,
   SubscriberView
 } from "@canton-dark/query-models";
 
@@ -53,19 +59,39 @@ export type VenueApiClient = {
   advanceClock: (milliseconds: number) => Promise<DemoStatusResponse>;
   createPair: (input: CreatePairRequest & { actorId: string }) => Promise<void>;
   getAuditTrail: (input: { actorId: string; pairId: string }) => Promise<AuditTrailView>;
+  getDealerInvitationHistory: (input: {
+    actorId: string;
+    dealerId: string;
+    pairId: string;
+  }) => Promise<DealerInvitationHistoryView>;
   getDealerWorkbenchView: (input: {
     actorId: string;
     dealerId: string;
     pairId: string;
   }) => Promise<DealerWorkbenchView>;
   getDemoStatus: () => Promise<DemoStatusResponse>;
+  getOperatorOversightView: (input: {
+    actorId: string;
+    pairId: string;
+  }) => Promise<OperatorOversightView>;
   getOperatorView: (input: { actorId: string; pairId: string }) => Promise<OperatorView>;
+  getSubscriberQuoteLadder: (input: {
+    actorId: string;
+    pairId: string;
+    rfqId: string;
+  }) => Promise<QuoteComparisonView>;
   getSubscriberView: (input: {
     actorId: string;
     pairId: string;
     subscriberId: string;
   }) => Promise<SubscriberView>;
   grantAccess: (input: GrantAccessRequest & { actorId: string; pairId: string }) => Promise<void>;
+  inviteDealers: (input: {
+    actorId: string;
+    dealerIds: readonly string[];
+    pairId: string;
+    rfqId: string;
+  }) => Promise<void>;
   markSettlementProgression: (input: {
     actorId: string;
     instructionId: string;
@@ -74,7 +100,26 @@ export type VenueApiClient = {
   }) => Promise<void>;
   openRfq: (input: OpenRfqRequest & { actorId: string; pairId: string }) => Promise<void>;
   pausePair: (input: PausePairRequest & { actorId: string; pairId: string }) => Promise<void>;
+  rejectAllQuotes: (input: {
+    actorId: string;
+    pairId: string;
+    reason?: string;
+    rfqId: string;
+  }) => Promise<void>;
   resetDemoState: (input: DemoResetRequest) => Promise<DemoStatusResponse>;
+  reviseInviteSet: (input: {
+    actorId: string;
+    dealerIds: readonly string[];
+    pairId: string;
+    rfqId: string;
+  }) => Promise<void>;
+  reviseQuote: (
+    input: {
+      actorId: string;
+      pairId: string;
+      quoteId: string;
+    } & SubmitQuoteRequest
+  ) => Promise<void>;
   submitQuote: (
     input: {
       actorId: string;
@@ -82,6 +127,12 @@ export type VenueApiClient = {
       rfqId: string;
     } & SubmitQuoteRequest
   ) => Promise<void>;
+  withdrawQuote: (input: {
+    actorId: string;
+    pairId: string;
+    quoteId: string;
+    reason?: string;
+  }) => Promise<void>;
 };
 
 const parseJsonBody = async (response: Response): Promise<unknown> => {
@@ -160,6 +211,11 @@ export const createVenueApiClient = (input: {
         actorId,
         parser: parseAuditTrailView
       }),
+    getDealerInvitationHistory: ({ actorId, dealerId, pairId }) =>
+      request(`/pairs/${pairId}/dealers/${dealerId}/history`, {
+        actorId,
+        parser: parseDealerInvitationHistoryView
+      }),
     getDealerWorkbenchView: ({ actorId, dealerId, pairId }) =>
       request(
         `/pairs/${pairId}/views/dealer-workbench?${new URLSearchParams({ dealerId }).toString()}`,
@@ -172,10 +228,20 @@ export const createVenueApiClient = (input: {
       request("/demo/status", {
         parser: parseDemoStatusResponse
       }),
+    getOperatorOversightView: ({ actorId, pairId }) =>
+      request(`/pairs/${pairId}/views/operator-oversight`, {
+        actorId,
+        parser: parseOperatorOversightView
+      }),
     getOperatorView: ({ actorId, pairId }) =>
       request(`/pairs/${pairId}/views/operator`, {
         actorId,
         parser: parseOperatorView
+      }),
+    getSubscriberQuoteLadder: ({ actorId, pairId, rfqId }) =>
+      request(`/pairs/${pairId}/rfqs/${rfqId}/quote-ladder`, {
+        actorId,
+        parser: parseQuoteComparisonView
       }),
     getSubscriberView: ({ actorId, pairId, subscriberId }) =>
       request(
@@ -187,6 +253,13 @@ export const createVenueApiClient = (input: {
       ),
     grantAccess: async ({ actorId, pairId, ...body }) => {
       await request(`/pairs/${pairId}/access`, {
+        actorId,
+        body,
+        method: "POST"
+      });
+    },
+    inviteDealers: async ({ actorId, pairId, rfqId, ...body }) => {
+      await request(`/pairs/${pairId}/rfqs/${rfqId}/invite-dealers`, {
         actorId,
         body,
         method: "POST"
@@ -215,14 +288,42 @@ export const createVenueApiClient = (input: {
         method: "POST"
       });
     },
+    rejectAllQuotes: async ({ actorId, pairId, rfqId, ...body }) => {
+      await request(`/pairs/${pairId}/rfqs/${rfqId}/reject-all`, {
+        actorId,
+        body,
+        method: "POST"
+      });
+    },
     resetDemoState: (body) =>
       request("/demo/reset", {
         body,
         method: "POST",
         parser: parseDemoStatusResponse
       }),
+    reviseInviteSet: async ({ actorId, pairId, rfqId, ...body }) => {
+      await request(`/pairs/${pairId}/rfqs/${rfqId}/revise-invite-set`, {
+        actorId,
+        body,
+        method: "POST"
+      });
+    },
+    reviseQuote: async ({ actorId, pairId, quoteId, ...body }) => {
+      await request(`/pairs/${pairId}/quotes/${quoteId}/revise`, {
+        actorId,
+        body,
+        method: "POST"
+      });
+    },
     submitQuote: async ({ actorId, pairId, rfqId, ...body }) => {
       await request(`/pairs/${pairId}/rfqs/${rfqId}/quotes`, {
+        actorId,
+        body,
+        method: "POST"
+      });
+    },
+    withdrawQuote: async ({ actorId, pairId, quoteId, ...body }) => {
+      await request(`/pairs/${pairId}/quotes/${quoteId}/withdraw`, {
         actorId,
         body,
         method: "POST"

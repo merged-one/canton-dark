@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { DealerWorkbenchView, OperatorView, SubscriberView } from "@canton-dark/query-models";
 
 import {
+  comparisonMetrics,
   dealerMetrics,
+  formatCountdown,
   humanize,
+  latestDealerInvitation,
+  latestDealerOpenQuote,
+  latestSubscriberRfq,
   latestOpenDealerRfq,
   latestOpenSubscriberQuote,
   operatorMetrics,
@@ -126,6 +131,7 @@ describe("render helpers", () => {
       ]
     } satisfies OperatorView;
     const subscriberView = {
+      availableDealerIds: ["dealer-alpha"],
       canOpenRfq: true,
       entitlements: ["view_pair"],
       executions: [],
@@ -207,6 +213,11 @@ describe("render helpers", () => {
         }
       ]
     } satisfies DealerWorkbenchView;
+    const operatorQuote = operatorView.quotes[0];
+
+    if (operatorQuote === undefined) {
+      throw new Error("Expected operator quote fixture.");
+    }
 
     expect(operatorMetrics(operatorView)).toEqual([
       { label: "Participants", value: "1" },
@@ -263,5 +274,185 @@ describe("render helpers", () => {
         ]
       })
     ).toBeUndefined();
+    expect(latestSubscriberRfq({ ...subscriberView, rfqs: dealerView.rfqs })).toMatchObject({
+      rfqId: "rfq-closed"
+    });
+    expect(
+      latestDealerInvitation({
+        dealerId: "dealer-alpha",
+        pair: operatorView.pair,
+        invitations: [
+          {
+            invitationId: "invite-1",
+            rfqId: "rfq-1",
+            dealerId: "dealer-alpha",
+            subscriberId: "subscriber-1",
+            invitationVersion: 1,
+            invitedAt: "2026-04-02T00:00:00.000Z",
+            invitedBy: "subscriber-1",
+            responseWindowClosesAt: "2026-04-02T00:10:00.000Z",
+            status: "open"
+          }
+        ],
+        quotes: [operatorQuote],
+        revisions: [],
+        withdrawals: []
+      })?.invitationId
+    ).toBe("invite-1");
+    expect(
+      latestDealerOpenQuote(
+        {
+          dealerId: "dealer-alpha",
+          pair: operatorView.pair,
+          invitations: [],
+          quotes: [operatorQuote],
+          revisions: [],
+          withdrawals: []
+        },
+        "rfq-1"
+      )?.quoteId
+    ).toBe("quote-1");
+    expect(
+      latestDealerOpenQuote(
+        {
+          dealerId: "dealer-alpha",
+          pair: operatorView.pair,
+          invitations: [],
+          quotes: [operatorQuote],
+          revisions: [],
+          withdrawals: []
+        },
+        undefined
+      )
+    ).toBeUndefined();
+    expect(
+      comparisonMetrics({
+        invitations: [],
+        pairId: "pair-1",
+        quotes: [
+          {
+            comparable: true,
+            createdAt: "2026-04-02T00:00:01.000Z",
+            dealerId: "dealer-alpha",
+            expiresAt: "2026-04-02T00:10:00.000Z",
+            price: 100,
+            quantity: 10,
+            quoteId: "quote-1",
+            rank: 1,
+            rfqId: "rfq-1",
+            status: "open"
+          }
+        ],
+        rfqId: "rfq-1",
+        side: "buy",
+        subscriberId: "subscriber-1",
+        tieBreakRule: "Best price"
+      })
+    ).toEqual([
+      { label: "Invited", value: "0" },
+      { label: "Quotes", value: "1" },
+      { label: "Comparable", value: "1" }
+    ]);
+    expect(formatCountdown("2026-04-02T00:00:00.000Z", "2026-04-02T00:01:05.000Z")).toBe(
+      "1m 05s remaining"
+    );
+    expect(formatCountdown("2026-04-02T00:02:00.000Z", "2026-04-02T00:01:05.000Z")).toBe(
+      "0m 55s past response window"
+    );
+  });
+
+  it("sorts dealer invitations and open quotes by recency within RFQ scope", () => {
+    const pair = {
+      approvalStatus: "approved" as const,
+      attestationStatus: "attested" as const,
+      dealerId: "dealer-alpha",
+      mode: "ATSPair" as const,
+      operatorId: "operator-demo",
+      pairId: "pair-1",
+      paused: false,
+      rulebookVersion: "v1"
+    };
+
+    expect(
+      latestDealerInvitation({
+        dealerId: "dealer-alpha",
+        invitations: [
+          {
+            dealerId: "dealer-alpha",
+            invitationId: "invite-a",
+            invitationVersion: 1,
+            invitedAt: "2026-04-02T00:00:00.000Z",
+            invitedBy: "subscriber-1",
+            responseWindowClosesAt: "2026-04-02T00:10:00.000Z",
+            rfqId: "rfq-1",
+            status: "open",
+            subscriberId: "subscriber-1"
+          },
+          {
+            dealerId: "dealer-alpha",
+            invitationId: "invite-z",
+            invitationVersion: 1,
+            invitedAt: "2026-04-02T00:00:00.000Z",
+            invitedBy: "subscriber-1",
+            responseWindowClosesAt: "2026-04-02T00:10:00.000Z",
+            rfqId: "rfq-2",
+            status: "open",
+            subscriberId: "subscriber-1"
+          }
+        ],
+        pair,
+        quotes: [],
+        revisions: [],
+        withdrawals: []
+      })?.invitationId
+    ).toBe("invite-z");
+
+    expect(
+      latestDealerOpenQuote(
+        {
+          dealerId: "dealer-alpha",
+          invitations: [],
+          pair,
+          quotes: [
+            {
+              createdAt: "2026-04-02T00:00:01.000Z",
+              dealerId: "dealer-alpha",
+              expiresAt: "2026-04-02T00:20:00.000Z",
+              price: 101,
+              quantity: 25,
+              quoteId: "quote-older",
+              rfqId: "rfq-1",
+              status: "open",
+              subscriberId: "subscriber-1"
+            },
+            {
+              createdAt: "2026-04-02T00:00:02.000Z",
+              dealerId: "dealer-alpha",
+              expiresAt: "2026-04-02T00:20:00.000Z",
+              price: 102,
+              quantity: 30,
+              quoteId: "quote-newer",
+              rfqId: "rfq-1",
+              status: "open",
+              subscriberId: "subscriber-1"
+            },
+            {
+              createdAt: "2026-04-02T00:00:03.000Z",
+              dealerId: "dealer-alpha",
+              expiresAt: "2026-04-02T00:20:00.000Z",
+              price: 103,
+              quantity: 35,
+              quoteId: "quote-other-rfq",
+              rfqId: "rfq-2",
+              status: "open",
+              subscriberId: "subscriber-1"
+            }
+          ],
+          revisions: [],
+          withdrawals: []
+        },
+        "rfq-1"
+      )?.quoteId
+    ).toBe("quote-newer");
   });
 });

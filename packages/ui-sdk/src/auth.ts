@@ -33,6 +33,8 @@ export const demoIdentities: Record<DemoRole, readonly DemoIdentity[]> = {
   ],
   dealer: [
     { actorId: "dealer-alpha", label: "Dealer alpha", role: "dealer" },
+    { actorId: "dealer-beta", label: "Dealer beta", role: "dealer" },
+    { actorId: "dealer-gamma", label: "Dealer gamma", role: "dealer" },
     { actorId: "dealer-outsider", label: "Unauthorized dealer", role: "dealer" }
   ]
 };

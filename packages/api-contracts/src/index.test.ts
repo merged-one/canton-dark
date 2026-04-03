@@ -131,6 +131,7 @@ describe("api-contract runtime schemas", () => {
     });
     expect(
       parseSubscriberView({
+        availableDealerIds: ["dealer-alpha"],
         pair: {
           pairId: "pair-1",
           mode: "SingleDealerPair",
@@ -201,6 +202,7 @@ describe("api-contract runtime schemas", () => {
       parseDemoStatusResponse({
         currentTime: "2026-04-02T00:00:00.000Z",
         dealerId: "dealer-alpha",
+        dealerIds: ["dealer-alpha"],
         mode: "phase1-ready",
         operatorId: "operator-demo",
         pairId: "pair-phase1-demo",
@@ -210,6 +212,7 @@ describe("api-contract runtime schemas", () => {
     ).toEqual({
       currentTime: "2026-04-02T00:00:00.000Z",
       dealerId: "dealer-alpha",
+      dealerIds: ["dealer-alpha"],
       mode: "phase1-ready",
       operatorId: "operator-demo",
       pairId: "pair-phase1-demo",
@@ -398,8 +401,23 @@ describe("api-contract runtime schemas", () => {
     });
     expect(
       parseQuoteComparisonView({
+        invitations: [
+          {
+            invitationId: "invite-1",
+            rfqId: "rfq-1",
+            dealerId: "dealer-alpha",
+            subscriberId: "subscriber-1",
+            invitationVersion: 1,
+            invitedAt: "2026-04-02T00:00:00.000Z",
+            invitedBy: "subscriber-1",
+            responseWindowClosesAt: "2026-04-02T00:05:00.000Z",
+            status: "responded",
+            respondedAt: "2026-04-02T00:00:10.000Z"
+          }
+        ],
         pairId: "pair-ats",
         rfqId: "rfq-1",
+        responseWindowClosesAt: "2026-04-02T00:05:00.000Z",
         subscriberId: "subscriber-1",
         side: "buy",
         tieBreakRule:
@@ -421,6 +439,11 @@ describe("api-contract runtime schemas", () => {
       })
     ).toMatchObject({
       pairId: "pair-ats",
+      invitations: [
+        {
+          invitationId: "invite-1"
+        }
+      ],
       quotes: [
         {
           quoteId: "quote-1",
@@ -430,6 +453,30 @@ describe("api-contract runtime schemas", () => {
     });
     expect(
       parseOperatorOversightView({
+        access: {
+          pairId: "pair-ats",
+          participants: []
+        },
+        dealerUniverse: ["dealer-alpha", "dealer-beta"],
+        executions: [],
+        health: {
+          title: "ATSPair health",
+          status: "healthy",
+          detail: "Healthy",
+          summary: {
+            pairId: "pair-ats",
+            mode: "ATSPair",
+            operatorId: "operator-1",
+            dealers: ["dealer-alpha", "dealer-beta"],
+            paused: false,
+            rulebookVersion: "v2",
+            activeParticipantCount: 3,
+            ledgerFacts: ["RFQ sessions"],
+            offLedgerFacts: ["Transient UI state"]
+          },
+          violations: []
+        },
+        inviteRevisionPolicy: "before_first_response",
         pair: {
           pairId: "pair-ats",
           mode: "ATSPair",
@@ -469,6 +516,7 @@ describe("api-contract runtime schemas", () => {
         ],
         quoteLadders: [],
         revisions: [],
+        settlements: [],
         withdrawals: [],
         audits: [
           {
@@ -482,6 +530,8 @@ describe("api-contract runtime schemas", () => {
         ]
       })
     ).toMatchObject({
+      dealerUniverse: ["dealer-alpha", "dealer-beta"],
+      inviteRevisionPolicy: "before_first_response",
       oversightRole: "blinded",
       quotes: [
         {

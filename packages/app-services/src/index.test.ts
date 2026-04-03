@@ -420,6 +420,7 @@ describe("createVenueApplication", () => {
       health
     });
     expect(await app.getSubscriberView(pair.pairId, "subscriber-1", "subscriber-1")).toEqual({
+      availableDealerIds: ["dealer-alpha"],
       pair: {
         pairId: "pair-demo",
         mode: "SingleDealerPair",

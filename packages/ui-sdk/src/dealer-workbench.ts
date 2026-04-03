@@ -1,4 +1,4 @@
-import type { DealerWorkbenchView } from "@canton-dark/query-models";
+import type { DealerInvitationHistoryView, DealerWorkbenchView } from "@canton-dark/query-models";
 import {
   escapeHtml,
   renderAppShell,
@@ -15,7 +15,9 @@ import { createVenueApiClient } from "./api-client";
 import { resolvePairId, resolveSession, saveSession } from "./auth";
 import {
   dealerMetrics,
-  latestOpenDealerRfq,
+  formatCountdown,
+  latestDealerInvitation,
+  latestDealerOpenQuote,
   renderActionButton,
   renderCode,
   renderStatus
@@ -26,6 +28,7 @@ type NoticeTone = "accent" | "alert" | "ok" | "warn";
 
 type DealerState = {
   demoPairId: string;
+  history: DealerInvitationHistoryView | undefined;
   loading: boolean;
   message:
     | {
@@ -36,73 +39,129 @@ type DealerState = {
   pairId: string;
   price: string;
   quantity: string;
-  selectedRfqId: string | undefined;
+  selectedInvitationId: string | undefined;
   serverNow: string;
   session: ReturnType<typeof resolveSession>;
   ttlMinutes: string;
   view: DealerWorkbenchView | undefined;
 };
 
-const renderInboundRfqTable = (view: DealerWorkbenchView): string =>
+const renderInvitationTable = (
+  history: DealerInvitationHistoryView,
+  selectedInvitationId: string | undefined
+): string =>
   renderTable({
-    caption: "Inbound RFQs",
+    caption: "Invitation inbox",
     columns: [
+      { key: "invitationId", label: "Invitation" },
       { key: "rfqId", label: "RFQ" },
-      { key: "instrumentId", label: "Instrument" },
-      { key: "subscriberId", label: "Subscriber" },
-      { key: "side", label: "Side" },
-      { key: "quantity", label: "Quantity", numeric: true },
       { key: "status", label: "Status" },
+      { key: "window", label: "Response window" },
       { key: "action", label: "Action" }
     ],
-    emptyMessage: "No inbound RFQs yet.",
-    rows: view.rfqs.map((rfq) => ({
-      id: rfq.rfqId,
+    emptyMessage: "No invitations are visible for this dealer.",
+    rows: history.invitations.map((invitation) => ({
+      id: invitation.invitationId,
       cells: {
-        rfqId: renderCode(rfq.rfqId),
-        instrumentId: escapeHtml(rfq.instrumentId),
-        subscriberId: renderCode(rfq.subscriberId),
-        side: escapeHtml(rfq.side.toUpperCase()),
-        quantity: escapeHtml(String(rfq.quantity)),
-        status: renderStatus(rfq.status),
+        invitationId: renderCode(invitation.invitationId),
+        rfqId: renderCode(invitation.rfqId),
+        status: renderStatus(invitation.status),
+        window: renderCode(invitation.responseWindowClosesAt),
         action:
-          rfq.status === "open"
-            ? renderActionButton({
-                action: "select-rfq",
-                id: rfq.rfqId,
-                label: "Quote RFQ"
+          selectedInvitationId === invitation.invitationId
+            ? renderPill("Selected", "accent")
+            : renderActionButton({
+                action: "select-invitation",
+                id: invitation.invitationId,
+                label: "Open detail"
               })
-            : escapeHtml("Quoted")
       }
     }))
   });
 
-const renderQuoteTable = (view: DealerWorkbenchView): string =>
+const renderQuoteTable = (
+  history: DealerInvitationHistoryView,
+  rfqId: string | undefined
+): string =>
   renderTable({
-    caption: "Dealer quotes",
+    caption: "Quote revisions and dispositions",
     columns: [
       { key: "quoteId", label: "Quote" },
-      { key: "rfqId", label: "RFQ" },
       { key: "price", label: "Price", numeric: true },
       { key: "quantity", label: "Quantity", numeric: true },
-      { key: "status", label: "Status" }
+      { key: "status", label: "Status" },
+      { key: "expiresAt", label: "Expires" }
     ],
-    emptyMessage: "No quotes submitted yet.",
-    rows: view.quotes.map((quote) => ({
-      id: quote.quoteId,
-      cells: {
-        quoteId: renderCode(quote.quoteId),
-        rfqId: renderCode(quote.rfqId),
-        price: escapeHtml(quote.price.toFixed(2)),
-        quantity: escapeHtml(String(quote.quantity)),
-        status: renderStatus(quote.status)
-      }
-    }))
+    emptyMessage: "No quotes are visible for the selected invitation.",
+    rows: history.quotes
+      .filter((quote) => rfqId === undefined || quote.rfqId === rfqId)
+      .map((quote) => ({
+        id: quote.quoteId,
+        cells: {
+          quoteId: renderCode(quote.quoteId),
+          price: escapeHtml(quote.price.toFixed(2)),
+          quantity: escapeHtml(String(quote.quantity)),
+          status: renderStatus(quote.status),
+          expiresAt: renderCode(quote.expiresAt)
+        }
+      }))
+  });
+
+const renderRevisionTable = (
+  history: DealerInvitationHistoryView,
+  rfqId: string | undefined
+): string =>
+  renderTable({
+    caption: "Revision lineage",
+    columns: [
+      { key: "revisionId", label: "Revision" },
+      { key: "previousQuoteId", label: "Previous quote" },
+      { key: "nextQuoteId", label: "Next quote" },
+      { key: "revisedAt", label: "Revised" }
+    ],
+    emptyMessage: "No quote revisions are visible for the selected invitation.",
+    rows: history.revisions
+      .filter((revision) => rfqId === undefined || revision.rfqId === rfqId)
+      .map((revision) => ({
+        id: revision.revisionId,
+        cells: {
+          revisionId: renderCode(revision.revisionId),
+          previousQuoteId: renderCode(revision.previousQuoteId),
+          nextQuoteId: renderCode(revision.nextQuoteId),
+          revisedAt: renderCode(revision.revisedAt)
+        }
+      }))
+  });
+
+const renderWithdrawalTable = (
+  history: DealerInvitationHistoryView,
+  rfqId: string | undefined
+): string =>
+  renderTable({
+    caption: "Withdrawals",
+    columns: [
+      { key: "withdrawalId", label: "Withdrawal" },
+      { key: "quoteId", label: "Quote" },
+      { key: "reason", label: "Reason" },
+      { key: "withdrawnAt", label: "Withdrawn" }
+    ],
+    emptyMessage: "No withdrawals are visible for the selected invitation.",
+    rows: history.withdrawals
+      .filter((withdrawal) => rfqId === undefined || withdrawal.rfqId === rfqId)
+      .map((withdrawal) => ({
+        id: withdrawal.withdrawalId,
+        cells: {
+          withdrawalId: renderCode(withdrawal.withdrawalId),
+          quoteId: renderCode(withdrawal.quoteId),
+          reason: escapeHtml(withdrawal.reason ?? "n/a"),
+          withdrawnAt: renderCode(withdrawal.withdrawnAt)
+        }
+      }))
   });
 
 const renderExecutionTable = (view: DealerWorkbenchView): string =>
   renderTable({
-    caption: "Execution visibility",
+    caption: "Final disposition",
     columns: [
       { key: "executionId", label: "Execution" },
       { key: "quoteId", label: "Quote" },
@@ -110,7 +169,7 @@ const renderExecutionTable = (view: DealerWorkbenchView): string =>
       { key: "price", label: "Price", numeric: true },
       { key: "quantity", label: "Quantity", numeric: true }
     ],
-    emptyMessage: "No executions yet.",
+    emptyMessage: "No executions are visible for this dealer.",
     rows: view.executions.map((execution) => ({
       id: execution.executionId,
       cells: {
@@ -124,12 +183,12 @@ const renderExecutionTable = (view: DealerWorkbenchView): string =>
   });
 
 const renderDealerContent = (state: DealerState): string => {
-  const selectedRfq =
-    state.view?.rfqs.find((rfq) => rfq.rfqId === state.selectedRfqId) ??
-    latestOpenDealerRfq(
-      state.view ?? {
-        dealerId: state.session.actorId,
-        executions: [],
+  const selectedInvitation =
+    state.history?.invitations.find(
+      (invitation) => invitation.invitationId === state.selectedInvitationId
+    ) ??
+    latestDealerInvitation(
+      state.history ?? {
         pair: {
           approvalStatus: "approved",
           attestationStatus: "attested",
@@ -140,14 +199,38 @@ const renderDealerContent = (state: DealerState): string => {
           paused: false,
           rulebookVersion: ""
         },
+        dealerId: state.session.actorId,
+        invitations: [],
         quotes: [],
-        rfqs: []
+        revisions: [],
+        withdrawals: []
       }
     );
+  const selectedRfqId = selectedInvitation?.rfqId;
+  const currentOpenQuote = latestDealerOpenQuote(
+    state.history ?? {
+      pair: {
+        approvalStatus: "approved",
+        attestationStatus: "attested",
+        dealerId: state.session.actorId,
+        mode: "SingleDealerPair",
+        operatorId: "",
+        pairId: state.pairId,
+        paused: false,
+        rulebookVersion: ""
+      },
+      dealerId: state.session.actorId,
+      invitations: [],
+      quotes: [],
+      revisions: [],
+      withdrawals: []
+    },
+    selectedRfqId
+  );
 
   const sessionCard = renderCard({
     title: "Role bootstrap",
-    subtitle: "Local identity used for dealer-scoped workbench access.",
+    subtitle: "Local identity used for dealer-scoped invitation and quote access.",
     body: `
       <form data-testid="dealer-session-form">
         <div class="field">
@@ -164,7 +247,7 @@ const renderDealerContent = (state: DealerState): string => {
 
   const pairCard = renderCard({
     title: "Pair access",
-    subtitle: "Load the pair whose RFQs are routed to this dealer.",
+    subtitle: "Load the pair whose directed invitations are visible to this dealer only.",
     body: `
       <form data-testid="dealer-pair-form">
         <div class="field">
@@ -180,16 +263,20 @@ const renderDealerContent = (state: DealerState): string => {
     testId: "dealer-pair-card"
   });
 
-  const quoteCard = renderCard({
-    title: "Submit quote",
+  const quoteForm = renderCard({
+    title: currentOpenQuote === undefined ? "Submit quote" : "Revise quote",
     subtitle:
-      "Quotes are priced off the API clock so Playwright and local demo flows stay deterministic.",
+      "This workbench only shows the dealer’s own invitations, quote lineage, and final disposition.",
     body: `
       <form data-testid="dealer-quote-form">
         <div class="form-grid">
           <div class="field">
+            <label for="dealer-selected-invitation">Invitation</label>
+            <input id="dealer-selected-invitation" value="${escapeHtml(selectedInvitation?.invitationId ?? "")}" readonly />
+          </div>
+          <div class="field">
             <label for="dealer-selected-rfq">RFQ</label>
-            <input id="dealer-selected-rfq" value="${escapeHtml(selectedRfq?.rfqId ?? "")}" readonly />
+            <input id="dealer-selected-rfq" value="${escapeHtml(selectedRfqId ?? "")}" readonly />
           </div>
           <div class="field">
             <label for="dealer-price">Price</label>
@@ -205,7 +292,12 @@ const renderDealerContent = (state: DealerState): string => {
           </div>
         </div>
         <div class="actions">
-          <button class="button button-primary" type="submit"${selectedRfq === undefined ? " disabled" : ""}>Submit quote</button>
+          <button class="button button-primary" type="submit"${selectedInvitation === undefined ? " disabled" : ""}>
+            ${currentOpenQuote === undefined ? "Submit quote" : "Revise quote"}
+          </button>
+          <button class="button button-danger" type="button" data-action="withdraw-quote"${currentOpenQuote === undefined ? " disabled" : ""} data-id="${escapeHtml(currentOpenQuote?.quoteId ?? "")}">
+            Withdraw current quote
+          </button>
         </div>
       </form>
     `,
@@ -217,50 +309,63 @@ const renderDealerContent = (state: DealerState): string => {
       ? ""
       : renderNotice(state.message.text, state.message.tone, "dealer-notice");
 
-  const detail =
-    state.view === undefined
-      ? renderWideCard({
-          title: "Dealer quote screen",
-          subtitle: "Load a pair to inspect inbound RFQs and quote from the dealer workbench.",
-          body: `<p class="empty" data-testid="dealer-empty-state">No pair is currently visible for this dealer.</p>`,
-          testId: "dealer-quote-screen"
-        })
-      : renderWideCard({
-          title: "Dealer quote screen",
-          subtitle:
-            "Dealer scope shows only routed RFQs, the dealer’s quotes, and resulting executions.",
-          body: `
+  const detail = renderWideCard({
+    title: "Dealer invitation detail screen",
+    subtitle:
+      "Dealers can review only their own invitations, revisions, and final disposition without seeing other dealers’ routing or economics.",
+    body:
+      state.view === undefined || state.history === undefined
+        ? `<p class="empty" data-testid="dealer-empty-state">No pair is currently visible for this dealer.</p>`
+        : `
             ${renderKeyValueGrid([
               { key: "Pair", value: state.view.pair.pairId },
               { key: "Operator", value: state.view.pair.operatorId },
-              { key: "Dealer", value: state.view.dealerId },
+              { key: "Dealer", value: state.history.dealerId },
               { key: "API clock", value: state.serverNow }
             ])}
             ${renderMetricGrid(dealerMetrics(state.view))}
             ${
-              selectedRfq === undefined
+              selectedInvitation === undefined
                 ? renderNotice(
-                    "No open RFQ is currently awaiting a quote from this dealer.",
+                    "Select an invitation to inspect its quote revisions and final disposition.",
                     "muted",
                     "dealer-rfq-summary"
                   )
-                : renderNotice(
-                    `RFQ ${selectedRfq.rfqId} is selected for ${selectedRfq.quantity} units of ${selectedRfq.instrumentId}.`,
-                    "accent",
-                    "dealer-rfq-summary"
-                  )
+                : `
+                    ${renderNotice(
+                      formatCountdown(state.serverNow, selectedInvitation.responseWindowClosesAt),
+                      selectedInvitation.status === "expired" ? "warn" : "accent",
+                      "dealer-rfq-summary"
+                    )}
+                    <div class="kv-grid" style="margin-top: 14px;">
+                      <article class="kv-item">
+                        <span class="kv-key">Selected invitation</span>
+                        <span class="kv-value">${renderCode(selectedInvitation.invitationId)}</span>
+                      </article>
+                      <article class="kv-item">
+                        <span class="kv-key">Status</span>
+                        <span class="kv-value">${renderStatus(selectedInvitation.status)}</span>
+                      </article>
+                      <article class="kv-item">
+                        <span class="kv-key">Current quote</span>
+                        <span class="kv-value">${currentOpenQuote === undefined ? escapeHtml("No open quote") : renderCode(currentOpenQuote.quoteId)}</span>
+                      </article>
+                    </div>
+                  `
             }
-            <div style="margin-top: 16px;">${renderInboundRfqTable(state.view)}</div>
-            <div style="margin-top: 16px;">${renderQuoteTable(state.view)}</div>
+            <div style="margin-top: 16px;">${renderInvitationTable(state.history, state.selectedInvitationId)}</div>
+            <div style="margin-top: 16px;">${renderQuoteTable(state.history, selectedRfqId)}</div>
+            <div style="margin-top: 16px;">${renderRevisionTable(state.history, selectedRfqId)}</div>
+            <div style="margin-top: 16px;">${renderWithdrawalTable(state.history, selectedRfqId)}</div>
             <div style="margin-top: 16px;">${renderExecutionTable(state.view)}</div>
           `,
-          testId: "dealer-quote-screen"
-        });
+    testId: "dealer-invitation-detail"
+  });
 
   return renderAppShell({
     title: "Dealer Workbench",
     strapline:
-      "Inspect routed RFQs, price against the deterministic demo clock, and watch executions appear in scope.",
+      "Inspect directed invitations, manage only your own quote revisions, and monitor the final disposition of your quotes.",
     sessionBadges: [
       renderPill("dealer", "accent", "dealer-role-badge"),
       renderPill(state.session.actorId, "muted", "dealer-actor-badge"),
@@ -271,7 +376,7 @@ const renderDealerContent = (state: DealerState): string => {
       <div class="card-grid">
         ${sessionCard}
         ${pairCard}
-        ${quoteCard}
+        ${quoteForm}
       </div>
       ${detail}
     `
@@ -292,28 +397,49 @@ export const mountDealerWorkbench = async ({
   const demoStatus = await client.getDemoStatus();
   const state: DealerState = {
     demoPairId: demoStatus.pairId,
+    history: undefined,
     loading: false,
     message: undefined,
     pairId: resolvePairId(demoStatus.pairId, location),
     price: "100.50",
     quantity: "50",
-    selectedRfqId: undefined,
+    selectedInvitationId: undefined,
     serverNow: demoStatus.currentTime,
     session: resolveSession("dealer", storage, location),
     ttlMinutes: "20",
     view: undefined
   };
 
+  const syncSelectedInvitation = (history: DealerInvitationHistoryView): void => {
+    if (state.selectedInvitationId !== undefined) {
+      const stillVisible = history.invitations.some(
+        (invitation) => invitation.invitationId === state.selectedInvitationId
+      );
+
+      if (stillVisible) {
+        return;
+      }
+    }
+
+    state.selectedInvitationId = latestDealerInvitation(history)?.invitationId;
+  };
+
   const refreshPair = async (): Promise<void> => {
     if (state.pairId.trim() === "") {
       state.view = undefined;
-      state.selectedRfqId = undefined;
+      state.history = undefined;
+      state.selectedInvitationId = undefined;
       return;
     }
 
-    const [status, view] = await Promise.all([
+    const [status, view, history] = await Promise.all([
       client.getDemoStatus(),
       client.getDealerWorkbenchView({
+        actorId: state.session.actorId,
+        dealerId: state.session.actorId,
+        pairId: state.pairId
+      }),
+      client.getDealerInvitationHistory({
         actorId: state.session.actorId,
         dealerId: state.session.actorId,
         pairId: state.pairId
@@ -322,13 +448,27 @@ export const mountDealerWorkbench = async ({
 
     state.serverNow = status.currentTime;
     state.view = view;
+    state.history = history;
+    syncSelectedInvitation(history);
 
-    const nextRfq = latestOpenDealerRfq(view);
+    const currentInvitation = state.history.invitations.find(
+      (invitation) => invitation.invitationId === state.selectedInvitationId
+    );
 
-    state.selectedRfqId = nextRfq?.rfqId;
+    if (currentInvitation !== undefined) {
+      const currentOpenQuote = latestDealerOpenQuote(state.history, currentInvitation.rfqId);
 
-    if (nextRfq !== undefined) {
-      state.quantity = String(nextRfq.quantity);
+      if (currentOpenQuote !== undefined) {
+        state.quantity = String(currentOpenQuote.quantity);
+      } else {
+        const rfq = state.view.rfqs.find(
+          (candidate) => candidate.rfqId === currentInvitation.rfqId
+        );
+
+        if (rfq !== undefined) {
+          state.quantity = String(rfq.quantity);
+        }
+      }
     }
   };
 
@@ -371,27 +511,49 @@ export const mountDealerWorkbench = async ({
         state.price = readValue(root, "#dealer-price");
         state.quantity = readValue(root, "#dealer-quantity");
         state.ttlMinutes = readValue(root, "#dealer-ttl");
+
         void runWithFeedback(
           async () => {
-            if (state.selectedRfqId === undefined) {
-              throw new Error("Select an open RFQ before submitting a quote.");
+            if (state.history === undefined) {
+              throw new Error("Select an invitation before submitting or revising a quote.");
+            }
+
+            const selectedInvitation = state.history.invitations.find(
+              (invitation) => invitation.invitationId === state.selectedInvitationId
+            );
+
+            if (selectedInvitation === undefined) {
+              throw new Error("Select an invitation before submitting or revising a quote.");
             }
 
             const expiresAt = new Date(
               new Date(state.serverNow).getTime() + Number(state.ttlMinutes) * 60_000
             ).toISOString();
+            const currentOpenQuote = latestDealerOpenQuote(state.history, selectedInvitation.rfqId);
 
-            await client.submitQuote({
-              actorId: state.session.actorId,
-              expiresAt,
-              pairId: state.pairId,
-              price: Number(state.price),
-              quantity: Number(state.quantity),
-              rfqId: state.selectedRfqId
-            });
+            if (currentOpenQuote === undefined) {
+              await client.submitQuote({
+                actorId: state.session.actorId,
+                expiresAt,
+                pairId: state.pairId,
+                price: Number(state.price),
+                quantity: Number(state.quantity),
+                rfqId: selectedInvitation.rfqId
+              });
+            } else {
+              await client.reviseQuote({
+                actorId: state.session.actorId,
+                expiresAt,
+                pairId: state.pairId,
+                price: Number(state.price),
+                quantity: Number(state.quantity),
+                quoteId: currentOpenQuote.quoteId
+              });
+            }
+
             await refreshPair();
           },
-          `Submitted quote for RFQ ${state.selectedRfqId ?? ""}.`,
+          "Dealer quote updated.",
           "ok"
         );
       });
@@ -407,16 +569,28 @@ export const mountDealerWorkbench = async ({
           return;
         }
 
-        if (action === "select-rfq" && id !== undefined) {
-          state.selectedRfqId = id;
-          const rfq = state.view?.rfqs.find((candidate) => candidate.rfqId === id);
-
-          if (rfq !== undefined) {
-            state.quantity = String(rfq.quantity);
-          }
-
-          setMessage(`Selected RFQ ${id} for quoting.`, "accent");
+        if (action === "select-invitation") {
+          const invitationId = String(id);
+          state.selectedInvitationId = invitationId;
+          setMessage(`Loaded invitation ${invitationId}.`, "accent");
           render();
+          return;
+        }
+
+        if (action === "withdraw-quote") {
+          const quoteId = String(id);
+          void runWithFeedback(
+            async () => {
+              await client.withdrawQuote({
+                actorId: state.session.actorId,
+                pairId: state.pairId,
+                quoteId
+              });
+              await refreshPair();
+            },
+            `Withdrew quote ${quoteId}.`,
+            "warn"
+          );
         }
       });
     });

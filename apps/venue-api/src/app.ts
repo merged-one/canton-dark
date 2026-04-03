@@ -23,8 +23,11 @@ import {
 import { DomainError } from "@canton-dark/domain-core";
 import {
   phase1DemoDefaults,
+  phase2DemoDefaults,
   seedPhase1DemoEnvironment,
-  type Phase1DemoMode
+  seedPhase2DemoEnvironment,
+  type Phase1DemoMode,
+  type Phase2DemoMode
 } from "@canton-dark/sim-harness";
 
 type ApiRequest = {
@@ -107,7 +110,12 @@ const isVenueApiAppOptions = (value: unknown): value is VenueApiAppOptions =>
   typeof value === "object" &&
   ("bootstrapMode" in value || "environment" in value || "seed" in value || "startAt" in value);
 
-const toBootstrapMode = (mode: DemoMode | undefined): Phase1DemoMode => mode ?? "phase1-ready";
+const isPhase2DemoMode = (mode: DemoMode): mode is Phase2DemoMode => mode === "phase2-ready";
+
+const toBootstrapMode = (mode: DemoMode | undefined): DemoMode => mode ?? "phase1-ready";
+
+const resolveDemoDefaults = (mode: DemoMode) =>
+  isPhase2DemoMode(mode) ? phase2DemoDefaults : phase1DemoDefaults;
 
 const createEnvironment = (options: VenueApiAppOptions): MemoryVenueEnvironment =>
   createMemoryVenueEnvironment({
@@ -129,12 +137,13 @@ export const createVenueApiApp = async (
 
   const buildDemoStatus = (): DemoStatusResponse => ({
     currentTime: state.environment.clock.now().toISOString(),
-    dealerId: phase1DemoDefaults.dealerId,
+    dealerId: resolveDemoDefaults(state.mode).dealerId,
+    dealerIds: resolveDemoDefaults(state.mode).dealerIds,
     mode: state.mode,
-    operatorId: phase1DemoDefaults.operatorId,
-    pairId: phase1DemoDefaults.pairId,
+    operatorId: resolveDemoDefaults(state.mode).operatorId,
+    pairId: resolveDemoDefaults(state.mode).pairId,
     seed: state.seed,
-    subscriberId: phase1DemoDefaults.subscriberId
+    subscriberId: resolveDemoDefaults(state.mode).subscriberId
   });
 
   const resetDemoState = async (next: {
@@ -148,10 +157,17 @@ export const createVenueApiApp = async (
       ...(state.startAt !== undefined ? { startAt: state.startAt } : {})
     });
 
-    await seedPhase1DemoEnvironment(state.environment, {
-      mode: state.mode,
-      seed: state.seed
-    });
+    if (isPhase2DemoMode(state.mode)) {
+      await seedPhase2DemoEnvironment(state.environment, {
+        mode: state.mode,
+        seed: state.seed
+      });
+    } else {
+      await seedPhase1DemoEnvironment(state.environment, {
+        mode: state.mode as Phase1DemoMode,
+        seed: state.seed
+      });
+    }
 
     return buildDemoStatus();
   };

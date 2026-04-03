@@ -1375,6 +1375,7 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
     ensureActorCanViewSubscriberScope(snapshot.pair, snapshot.grants, actorId, rfq.subscriberId);
 
     return projectSubscriberQuoteLadder({
+      invitations: snapshot.invitations,
       pair: snapshot.pair,
       rfq,
       quotes: snapshot.quotes
@@ -1422,9 +1423,12 @@ export const createVenueApplication = (dependencies: VenueApplicationDependencie
 
     return projectOperatorOversightView({
       pair: snapshot.pair,
+      grants: snapshot.grants,
       rfqs: snapshot.rfqs,
       invitations: snapshot.invitations,
       quotes: snapshot.quotes,
+      executions: snapshot.executions,
+      settlements: snapshot.settlements,
       revisions: snapshot.revisions,
       withdrawals: snapshot.withdrawals,
       auditEntries: await dependencies.auditLog.list(pairId)

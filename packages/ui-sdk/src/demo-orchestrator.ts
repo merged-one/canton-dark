@@ -17,12 +17,13 @@ type NoticeTone = "accent" | "alert" | "ok" | "warn";
 type DemoState = {
   currentTime: string;
   dealerId: string;
+  dealerIds: readonly string[];
   loading: boolean;
   message?: {
     text: string;
     tone: NoticeTone;
   };
-  mode: "empty" | "phase1-complete" | "phase1-ready";
+  mode: "empty" | "phase1-complete" | "phase1-ready" | "phase2-ready";
   operatorId: string;
   pairId: string;
   seed: number;
@@ -33,7 +34,12 @@ const renderLaunchLinks = (state: DemoState): string => `
   <ul class="launch-list" data-testid="demo-launch-links">
     <li><a href="${escapeHtml(buildRoleUrl({ actorId: state.operatorId, pairId: state.pairId, role: "operator" }))}" target="_blank" rel="noreferrer">Open operator console</a></li>
     <li><a href="${escapeHtml(buildRoleUrl({ actorId: state.subscriberId, pairId: state.pairId, role: "subscriber" }))}" target="_blank" rel="noreferrer">Open subscriber terminal</a></li>
-    <li><a href="${escapeHtml(buildRoleUrl({ actorId: state.dealerId, pairId: state.pairId, role: "dealer" }))}" target="_blank" rel="noreferrer">Open dealer workbench</a></li>
+    ${state.dealerIds
+      .map(
+        (dealerId) =>
+          `<li><a href="${escapeHtml(buildRoleUrl({ actorId: dealerId, pairId: state.pairId, role: "dealer" }))}" target="_blank" rel="noreferrer">Open dealer workbench (${escapeHtml(dealerId)})</a></li>`
+      )
+      .join("")}
   </ul>
 `;
 
@@ -47,6 +53,7 @@ const renderDemoContent = (state: DemoState): string => {
         <button class="button" type="button" data-action="seed-empty">Seed empty stack</button>
         <button class="button button-primary" type="button" data-action="seed-ready">Seed ready pair</button>
         <button class="button" type="button" data-action="seed-complete">Seed completed flow</button>
+        <button class="button button-primary" type="button" data-action="seed-phase2-ready">Seed Phase 2 ATSPair</button>
       </div>
       <div class="actions">
         <button class="button" type="button" data-action="advance-clock">Advance API clock +5m</button>
@@ -78,7 +85,8 @@ const renderDemoContent = (state: DemoState): string => {
       ${renderKeyValueGrid([
         { key: "Operator", value: state.operatorId },
         { key: "Subscriber", value: state.subscriberId },
-        { key: "Dealer", value: state.dealerId }
+        { key: "Primary dealer", value: state.dealerId },
+        { key: "Dealer roster", value: state.dealerIds.join(", ") }
       ])}
     `,
     testId: "demo-roster-card"
@@ -87,7 +95,7 @@ const renderDemoContent = (state: DemoState): string => {
   return renderAppShell({
     title: "Demo Orchestrator",
     strapline:
-      "Reset the deterministic Phase 1 stack and jump straight into operator, subscriber, and dealer screens.",
+      "Reset the deterministic demo stack and jump straight into operator, subscriber, and dealer screens.",
     sessionBadges: [
       renderPill(state.mode, "accent", "demo-mode-badge"),
       renderPill(state.loading ? "Working" : "Ready", state.loading ? "warn" : "ok")
@@ -130,6 +138,7 @@ export const mountDemoOrchestrator = async ({
   const state: DemoState = {
     currentTime: status.currentTime,
     dealerId: status.dealerId,
+    dealerIds: status.dealerIds,
     loading: false,
     mode: status.mode,
     operatorId: status.operatorId,
@@ -141,6 +150,7 @@ export const mountDemoOrchestrator = async ({
   const assign = (next: typeof status): void => {
     state.currentTime = next.currentTime;
     state.dealerId = next.dealerId;
+    state.dealerIds = next.dealerIds;
     state.mode = next.mode;
     state.operatorId = next.operatorId;
     state.pairId = next.pairId;
@@ -184,6 +194,15 @@ export const mountDemoOrchestrator = async ({
           void runWithFeedback(
             () => client.resetDemoState({ mode: "phase1-complete" }),
             "Seeded completed flow.",
+            "ok"
+          );
+          return;
+        }
+
+        if (action === "seed-phase2-ready") {
+          void runWithFeedback(
+            () => client.resetDemoState({ mode: "phase2-ready" }),
+            "Seeded Phase 2 ATSPair.",
             "ok"
           );
           return;

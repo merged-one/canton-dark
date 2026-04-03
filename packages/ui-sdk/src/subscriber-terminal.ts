@@ -1,4 +1,4 @@
-import type { SubscriberView } from "@canton-dark/query-models";
+import type { QuoteComparisonView, SubscriberView } from "@canton-dark/query-models";
 import {
   escapeHtml,
   renderAppShell,
@@ -14,7 +14,9 @@ import {
 import { createVenueApiClient } from "./api-client";
 import { resolvePairId, resolveSession, saveSession } from "./auth";
 import {
-  latestOpenSubscriberQuote,
+  comparisonMetrics,
+  formatCountdown,
+  latestSubscriberRfq,
   renderActionButton,
   renderCode,
   renderStatus,
@@ -25,6 +27,7 @@ import { readValue, resolveApiBaseUrl, toErrorMessage, type AppBootOptions } fro
 type NoticeTone = "accent" | "alert" | "ok" | "warn";
 
 type SubscriberState = {
+  comparison: QuoteComparisonView | undefined;
   demoPairId: string;
   instrumentId: string;
   loading: boolean;
@@ -36,12 +39,61 @@ type SubscriberState = {
     | undefined;
   pairId: string;
   quantity: string;
+  responseWindowMinutes: string;
+  selectedDealerIds: string[];
+  selectedRfqId: string | undefined;
+  serverNow: string;
   session: ReturnType<typeof resolveSession>;
   side: "buy" | "sell";
   view: SubscriberView | undefined;
 };
 
-const renderRfqTable = (view: SubscriberView): string =>
+const readCheckedValues = (root: ParentNode, selector: string): string[] =>
+  [...root.querySelectorAll<HTMLInputElement>(selector)]
+    .filter((field) => field.checked)
+    .map((field) => field.value);
+
+const renderDealerChecklist = (state: SubscriberState): string => {
+  if (state.view?.pair.mode !== "ATSPair") {
+    return `
+      <div class="field">
+        <label>Routed dealer</label>
+        <div class="kv-grid">
+          <article class="kv-item">
+            <span class="kv-key">Dealer</span>
+            <span class="kv-value">${renderCode(state.view?.pair.dealerId ?? "")}</span>
+          </article>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <fieldset class="field">
+      <legend>Invited dealers</legend>
+      <div class="choice-grid">
+        ${state.view.availableDealerIds
+          .map(
+            (dealerId) => `
+              <label class="choice-item" for="subscriber-dealer-${escapeHtml(dealerId)}">
+                <input
+                  id="subscriber-dealer-${escapeHtml(dealerId)}"
+                  type="checkbox"
+                  name="invitedDealerIds"
+                  value="${escapeHtml(dealerId)}"
+                  ${state.selectedDealerIds.includes(dealerId) ? "checked" : ""}
+                />
+                <span>${escapeHtml(dealerId)}</span>
+              </label>
+            `
+          )
+          .join("")}
+      </div>
+    </fieldset>
+  `;
+};
+
+const renderRfqTable = (view: SubscriberView, selectedRfqId: string | undefined): string =>
   renderTable({
     caption: "Subscriber RFQs",
     columns: [
@@ -49,7 +101,8 @@ const renderRfqTable = (view: SubscriberView): string =>
       { key: "instrumentId", label: "Instrument" },
       { key: "side", label: "Side" },
       { key: "quantity", label: "Quantity", numeric: true },
-      { key: "status", label: "Status" }
+      { key: "status", label: "Status" },
+      { key: "action", label: "Action" }
     ],
     emptyMessage: "No RFQs yet.",
     rows: view.rfqs.map((rfq) => ({
@@ -59,30 +112,66 @@ const renderRfqTable = (view: SubscriberView): string =>
         instrumentId: escapeHtml(rfq.instrumentId),
         side: escapeHtml(rfq.side.toUpperCase()),
         quantity: escapeHtml(String(rfq.quantity)),
-        status: renderStatus(rfq.status)
+        status: renderStatus(rfq.status),
+        action:
+          selectedRfqId === rfq.rfqId
+            ? renderPill("Selected", "accent")
+            : renderActionButton({
+                action: "select-rfq",
+                id: rfq.rfqId,
+                label: "Compare quotes"
+              })
       }
     }))
   });
 
-const renderQuoteTable = (view: SubscriberView): string =>
+const renderInvitationTable = (comparison: QuoteComparisonView): string =>
   renderTable({
-    caption: "Dealer quotes",
+    caption: "Directed invitations",
+    columns: [
+      { key: "dealerId", label: "Dealer" },
+      { key: "status", label: "Status" },
+      { key: "invitedAt", label: "Invited" },
+      { key: "respondedAt", label: "Responded" },
+      { key: "window", label: "Response window" }
+    ],
+    emptyMessage: "No directed invitations are visible for the selected RFQ.",
+    rows: comparison.invitations.map((invitation) => ({
+      id: invitation.invitationId,
+      cells: {
+        dealerId: renderCode(invitation.dealerId),
+        status: renderStatus(invitation.status),
+        invitedAt: renderCode(invitation.invitedAt),
+        respondedAt:
+          invitation.respondedAt === undefined
+            ? escapeHtml("Awaiting response")
+            : renderCode(invitation.respondedAt),
+        window: renderCode(invitation.responseWindowClosesAt)
+      }
+    }))
+  });
+
+const renderQuoteTable = (comparison: QuoteComparisonView): string =>
+  renderTable({
+    caption: "Quote comparison",
     columns: [
       { key: "quoteId", label: "Quote" },
-      { key: "rfqId", label: "RFQ" },
       { key: "dealerId", label: "Dealer" },
       { key: "price", label: "Price", numeric: true },
+      { key: "quantity", label: "Quantity", numeric: true },
+      { key: "rank", label: "Rank", numeric: true },
       { key: "status", label: "Status" },
       { key: "action", label: "Action" }
     ],
-    emptyMessage: "No dealer quotes yet.",
-    rows: view.quotes.map((quote) => ({
+    emptyMessage: "No dealer quotes are visible for the selected RFQ.",
+    rows: comparison.quotes.map((quote) => ({
       id: quote.quoteId,
       cells: {
         quoteId: renderCode(quote.quoteId),
-        rfqId: renderCode(quote.rfqId),
         dealerId: renderCode(quote.dealerId),
         price: escapeHtml(quote.price.toFixed(2)),
+        quantity: escapeHtml(String(quote.quantity)),
+        rank: quote.rank === undefined ? escapeHtml("n/a") : escapeHtml(String(quote.rank)),
         status: renderStatus(quote.status),
         action:
           quote.status === "open"
@@ -92,7 +181,7 @@ const renderQuoteTable = (view: SubscriberView): string =>
                 label: "Accept quote",
                 tone: "button-primary"
               })
-            : escapeHtml("Awaiting next step")
+            : escapeHtml("Closed")
       }
     }))
   });
@@ -159,7 +248,7 @@ const renderSubscriberContent = (state: SubscriberState): string => {
 
   const pairCard = renderCard({
     title: "Pair access",
-    subtitle: "Load a pair granted to this subscriber identity.",
+    subtitle: "Load the subscriber-scoped pair and refresh quote comparison state.",
     body: `
       <form data-testid="subscriber-pair-form">
         <div class="field">
@@ -176,8 +265,9 @@ const renderSubscriberContent = (state: SubscriberState): string => {
   });
 
   const rfqForm = renderCard({
-    title: "Open RFQ",
-    subtitle: "Subscriber order intent stays on-ledger; form state stays off-ledger.",
+    title: state.view?.pair.mode === "ATSPair" ? "Open directed RFQ" : "Open RFQ",
+    subtitle:
+      "Subscriber intent is submitted as typed commands. Quote comparison, countdown, and invite visibility stay on the scoped read side.",
     body: `
       <form data-testid="subscriber-rfq-form">
         <div class="form-grid">
@@ -196,9 +286,18 @@ const renderSubscriberContent = (state: SubscriberState): string => {
             <label for="subscriber-quantity">Quantity</label>
             <input id="subscriber-quantity" inputmode="numeric" value="${escapeHtml(state.quantity)}" />
           </div>
+          <div class="field">
+            <label for="subscriber-response-window">Response window (minutes)</label>
+            <input id="subscriber-response-window" inputmode="numeric" value="${escapeHtml(state.responseWindowMinutes)}" />
+          </div>
+        </div>
+        <div style="margin-top: 12px;">
+          ${renderDealerChecklist(state)}
         </div>
         <div class="actions">
-          <button class="button button-primary" type="submit"${state.view?.canOpenRfq === false || state.view === undefined ? " disabled" : ""}>Open RFQ</button>
+          <button class="button button-primary" type="submit"${state.view?.canOpenRfq === false || state.view === undefined ? " disabled" : ""}>
+            ${state.view?.pair.mode === "ATSPair" ? "Open directed RFQ" : "Open RFQ"}
+          </button>
         </div>
       </form>
     `,
@@ -210,79 +309,73 @@ const renderSubscriberContent = (state: SubscriberState): string => {
       ? ""
       : renderNotice(state.message.text, state.message.tone, "subscriber-notice");
 
-  const actionableQuote = latestOpenSubscriberQuote(
-    state.view ?? {
-      canOpenRfq: false,
-      entitlements: [],
-      executions: [],
-      pair: {
-        approvalStatus: "approved",
-        attestationStatus: "attested",
-        dealerId: "",
-        mode: "SingleDealerPair",
-        operatorId: "",
-        pairId: "",
-        paused: false,
-        rulebookVersion: ""
-      },
-      quotes: [],
-      rfqs: [],
-      settlements: [],
-      subscriberId: state.session.actorId
-    }
-  );
-
-  const detail =
+  const comparison = state.comparison;
+  const hasOpenQuotes = comparison?.quotes.some((quote) => quote.status === "open") === true;
+  const countdown = formatCountdown(state.serverNow, comparison?.responseWindowClosesAt);
+  const compareBody =
     state.view === undefined
-      ? renderWideCard({
-          title: "Subscriber RFQ screen",
-          subtitle: "Load a pair to open RFQs and review returned quotes.",
-          body: `<p class="empty" data-testid="subscriber-empty-state">No pair is currently visible for this subscriber.</p>`,
-          testId: "subscriber-rfq-screen"
-        })
-      : renderWideCard({
-          title: "Subscriber RFQ screen",
-          subtitle: "Only subscriber-scoped data is projected into this screen.",
-          body: `
-            ${renderKeyValueGrid([
-              { key: "Pair", value: state.view.pair.pairId },
-              { key: "Dealer", value: state.view.pair.dealerId },
-              { key: "Entitlements", value: state.view.entitlements.join(", ") || "none" },
-              { key: "Pair state", value: state.view.pair.paused ? "paused" : "active" }
-            ])}
-            ${renderMetricGrid(subscriberMetrics(state.view))}
-            ${
-              actionableQuote === undefined
-                ? renderNotice(
-                    "No actionable quote is currently open for this subscriber.",
-                    "muted",
-                    "subscriber-quote-summary"
-                  )
-                : `<section data-testid="subscriber-quote-summary">
-                    ${renderNotice(
-                      `Quote ${actionableQuote.quoteId} is open at ${actionableQuote.price.toFixed(2)} for ${actionableQuote.quantity} units.`,
-                      "ok"
-                    )}
-                    <div class="actions">${renderActionButton({
-                      action: "accept-quote",
-                      id: actionableQuote.quoteId,
-                      label: "Accept quote",
-                      tone: "button-primary"
-                    })}</div>
-                  </section>`
-            }
-            <div style="margin-top: 16px;">${renderRfqTable(state.view)}</div>
-            <div style="margin-top: 16px;">${renderQuoteTable(state.view)}</div>
-            <div style="margin-top: 16px;">${renderExecutionTable(state.view)}</div>
-            <div style="margin-top: 16px;">${renderSettlementTable(state.view)}</div>
-          `,
-          testId: "subscriber-rfq-screen"
-        });
+      ? `<p class="empty" data-testid="subscriber-empty-state">No pair is currently visible for this subscriber.</p>`
+      : `
+          ${renderKeyValueGrid([
+            { key: "Pair", value: state.view.pair.pairId },
+            { key: "Mode", value: state.view.pair.mode },
+            { key: "Subscriber", value: state.view.subscriberId },
+            { key: "API clock", value: state.serverNow }
+          ])}
+          ${renderMetricGrid(subscriberMetrics(state.view))}
+          <div style="margin-top: 16px;">${renderRfqTable(state.view, state.selectedRfqId)}</div>
+          ${
+            comparison === undefined
+              ? renderNotice(
+                  "Select an RFQ to inspect invited dealers, response timing, and returned quotes.",
+                  "muted",
+                  "subscriber-compare-summary"
+                )
+              : `
+                  <section data-testid="subscriber-quote-summary">
+                    ${renderNotice(countdown, countdown.includes("past") ? "warn" : "accent")}
+                    ${renderMetricGrid(comparisonMetrics(comparison))}
+                    <div class="kv-grid" style="margin-top: 14px;">
+                      <article class="kv-item">
+                        <span class="kv-key">Tie-break</span>
+                        <span class="kv-value">${escapeHtml(comparison.tieBreakRule)}</span>
+                      </article>
+                      <article class="kv-item">
+                        <span class="kv-key">Selected RFQ</span>
+                        <span class="kv-value">${renderCode(comparison.rfqId)}</span>
+                      </article>
+                    </div>
+                    ${
+                      hasOpenQuotes
+                        ? `<div class="actions">${renderActionButton({
+                            action: "reject-all",
+                            id: comparison.rfqId,
+                            label: "Reject all quotes",
+                            tone: "button-danger"
+                          })}</div>`
+                        : ""
+                    }
+                  </section>
+                  <div style="margin-top: 16px;">${renderInvitationTable(comparison)}</div>
+                  <div style="margin-top: 16px;">${renderQuoteTable(comparison)}</div>
+                `
+          }
+          <div style="margin-top: 16px;">${renderExecutionTable(state.view)}</div>
+          <div style="margin-top: 16px;">${renderSettlementTable(state.view)}</div>
+        `;
+
+  const detail = renderWideCard({
+    title: "Subscriber compare-quotes screen",
+    subtitle:
+      "The subscriber can view the directed invite set, monitor the response window, compare returned quotes, and decide whether to accept one or reject all.",
+    body: compareBody,
+    testId: "subscriber-compare-screen"
+  });
 
   return renderAppShell({
     title: "Subscriber Terminal",
     strapline:
-      "Open RFQs, review dealer responses, and confirm execution and settlement visibility.",
+      "Open directed RFQs, monitor the response countdown, compare dealer responses, and accept one quote or reject the set.",
     sessionBadges: [
       renderPill("subscriber", "accent", "subscriber-role-badge"),
       renderPill(state.session.actorId, "muted", "subscriber-actor-badge"),
@@ -313,28 +406,81 @@ export const mountSubscriberTerminal = async ({
   });
   const demoStatus = await client.getDemoStatus();
   const state: SubscriberState = {
+    comparison: undefined,
     demoPairId: demoStatus.pairId,
-    instrumentId: "CUSIP-1",
+    instrumentId: "CUSIP-ATS-1",
     loading: false,
     message: undefined,
     pairId: resolvePairId(demoStatus.pairId, location),
     quantity: "50",
+    responseWindowMinutes: "10",
+    selectedDealerIds: [...demoStatus.dealerIds],
+    selectedRfqId: undefined,
+    serverNow: demoStatus.currentTime,
     session: resolveSession("subscriber", storage, location),
     side: "buy",
     view: undefined
   };
 
-  const refreshPair = async (): Promise<void> => {
-    if (state.pairId.trim() === "") {
-      state.view = undefined;
+  const ensureSelectedDealers = (available: readonly string[]): void => {
+    const next = state.selectedDealerIds.filter((dealerId) => available.includes(dealerId));
+
+    state.selectedDealerIds = next.length > 0 ? next : [...available];
+  };
+
+  const syncSelectedRfq = (view: SubscriberView): void => {
+    if (state.selectedRfqId !== undefined) {
+      const stillVisible = view.rfqs.some((rfq) => rfq.rfqId === state.selectedRfqId);
+
+      if (stillVisible) {
+        return;
+      }
+    }
+
+    state.selectedRfqId = latestSubscriberRfq(view)?.rfqId;
+  };
+
+  const refreshComparison = async (): Promise<void> => {
+    if (state.view === undefined || state.selectedRfqId === undefined) {
+      state.comparison = undefined;
       return;
     }
 
-    state.view = await client.getSubscriberView({
-      actorId: state.session.actorId,
-      pairId: state.pairId,
-      subscriberId: state.session.actorId
-    });
+    const [status, comparison] = await Promise.all([
+      client.getDemoStatus(),
+      client.getSubscriberQuoteLadder({
+        actorId: state.session.actorId,
+        pairId: state.pairId,
+        rfqId: state.selectedRfqId
+      })
+    ]);
+
+    state.serverNow = status.currentTime;
+    state.comparison = comparison;
+  };
+
+  const refreshPair = async (): Promise<void> => {
+    if (state.pairId.trim() === "") {
+      state.view = undefined;
+      state.comparison = undefined;
+      state.selectedRfqId = undefined;
+      return;
+    }
+
+    const [status, view] = await Promise.all([
+      client.getDemoStatus(),
+      client.getSubscriberView({
+        actorId: state.session.actorId,
+        pairId: state.pairId,
+        subscriberId: state.session.actorId
+      })
+    ]);
+
+    state.serverNow = status.currentTime;
+    state.view = view;
+    ensureSelectedDealers(view.availableDealerIds);
+    syncSelectedRfq(view);
+    await refreshComparison();
   };
 
   const setMessage = (text: string, tone: NoticeTone): void => {
@@ -376,15 +522,43 @@ export const mountSubscriberTerminal = async ({
         state.instrumentId = readValue(root, "#subscriber-instrument-id");
         state.side = readValue(root, "#subscriber-side") as SubscriberState["side"];
         state.quantity = readValue(root, "#subscriber-quantity");
+        state.responseWindowMinutes = readValue(root, "#subscriber-response-window");
+        state.selectedDealerIds = readCheckedValues(root, "input[name='invitedDealerIds']");
+
         void runWithFeedback(
           async () => {
+            if (state.view?.pair.mode === "ATSPair" && state.selectedDealerIds.length === 0) {
+              throw new Error("Select at least one dealer for an ATSPair RFQ.");
+            }
+
+            const status = await client.getDemoStatus();
+            state.serverNow = status.currentTime;
+
             await client.openRfq({
               actorId: state.session.actorId,
               instrumentId: state.instrumentId,
               pairId: state.pairId,
               quantity: Number(state.quantity),
+              responseWindowClosesAt: new Date(
+                new Date(state.serverNow).getTime() + Number(state.responseWindowMinutes) * 60_000
+              ).toISOString(),
               side: state.side
             });
+            await refreshPair();
+
+            const rfqId =
+              state.view === undefined ? undefined : latestSubscriberRfq(state.view)?.rfqId;
+
+            if (state.view?.pair.mode === "ATSPair" && rfqId !== undefined) {
+              await client.inviteDealers({
+                actorId: state.session.actorId,
+                dealerIds: state.selectedDealerIds,
+                pairId: state.pairId,
+                rfqId
+              });
+              state.selectedRfqId = rfqId;
+            }
+
             await refreshPair();
           },
           `Opened RFQ for ${state.instrumentId}.`,
@@ -403,18 +577,43 @@ export const mountSubscriberTerminal = async ({
           return;
         }
 
-        if (action === "accept-quote" && id !== undefined) {
+        if (action === "select-rfq") {
+          const rfqId = String(id);
+          state.selectedRfqId = rfqId;
+          void runWithFeedback(refreshComparison, `Loaded RFQ ${rfqId}.`, "accent");
+          return;
+        }
+
+        if (action === "accept-quote") {
+          const quoteId = String(id);
           void runWithFeedback(
             async () => {
               await client.acceptQuote({
                 actorId: state.session.actorId,
                 pairId: state.pairId,
-                quoteId: id
+                quoteId
               });
               await refreshPair();
             },
-            `Accepted quote ${id}.`,
+            `Accepted quote ${quoteId}.`,
             "ok"
+          );
+          return;
+        }
+
+        if (action === "reject-all") {
+          const rfqId = String(id);
+          void runWithFeedback(
+            async () => {
+              await client.rejectAllQuotes({
+                actorId: state.session.actorId,
+                pairId: state.pairId,
+                rfqId
+              });
+              await refreshPair();
+            },
+            `Rejected all quotes for RFQ ${rfqId}.`,
+            "warn"
           );
         }
       });

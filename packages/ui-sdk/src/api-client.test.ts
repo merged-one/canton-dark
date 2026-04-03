@@ -35,6 +35,7 @@ describe("createVenueApiClient", () => {
         return jsonResponse({
           currentTime: "2026-04-02T00:00:00.000Z",
           dealerId: "dealer-alpha",
+          dealerIds: ["dealer-alpha"],
           mode: "phase1-ready",
           operatorId: "operator-demo",
           pairId: "pair-phase1-demo",
@@ -110,6 +111,7 @@ describe("createVenueApiClient", () => {
     await expect(client.getDemoStatus()).resolves.toEqual({
       currentTime: "2026-04-02T00:00:00.000Z",
       dealerId: "dealer-alpha",
+      dealerIds: ["dealer-alpha"],
       mode: "phase1-ready",
       operatorId: "operator-demo",
       pairId: "pair-phase1-demo",
@@ -190,6 +192,22 @@ describe("createVenueApiClient", () => {
         return new Response(null, { status: 200 });
       }
 
+      if (url.endsWith("/pairs/pair-phase1-demo/rfqs/rfq-1/invite-dealers")) {
+        expect(parseRequestBody(init)).toEqual({
+          dealerIds: ["dealer-alpha", "dealer-beta"]
+        });
+
+        return new Response(null, { status: 200 });
+      }
+
+      if (url.endsWith("/pairs/pair-phase1-demo/rfqs/rfq-1/revise-invite-set")) {
+        expect(parseRequestBody(init)).toEqual({
+          dealerIds: ["dealer-alpha", "dealer-beta", "dealer-gamma"]
+        });
+
+        return new Response(null, { status: 200 });
+      }
+
       if (url.endsWith("/pairs/pair-phase1-demo/rfqs/rfq-1/quotes")) {
         expect(parseRequestBody(init)).toEqual({
           expiresAt: "2026-04-02T00:20:00.000Z",
@@ -200,8 +218,115 @@ describe("createVenueApiClient", () => {
         return new Response(null, { status: 200 });
       }
 
+      if (url.endsWith("/pairs/pair-phase1-demo/quotes/quote-1/revise")) {
+        expect(parseRequestBody(init)).toEqual({
+          expiresAt: "2026-04-02T00:25:00.000Z",
+          price: 99.75,
+          quantity: 55
+        });
+
+        return new Response(null, { status: 200 });
+      }
+
+      if (url.endsWith("/pairs/pair-phase1-demo/quotes/quote-1/withdraw")) {
+        expect(parseRequestBody(init)).toEqual({
+          reason: "manual pullback"
+        });
+
+        return new Response(null, { status: 200 });
+      }
+
       if (url.endsWith("/pairs/pair-phase1-demo/quotes/quote-1/accept")) {
         return new Response(null, { status: 200 });
+      }
+
+      if (url.endsWith("/pairs/pair-phase1-demo/rfqs/rfq-1/reject-all")) {
+        expect(parseRequestBody(init)).toEqual({
+          reason: "no fill"
+        });
+
+        return new Response(null, { status: 200 });
+      }
+
+      if (url.endsWith("/pairs/pair-phase1-demo/rfqs/rfq-1/quote-ladder")) {
+        return jsonResponse({
+          invitations: [],
+          pairId: "pair-phase1-demo",
+          rfqId: "rfq-1",
+          responseWindowClosesAt: "2026-04-02T00:05:00.000Z",
+          subscriberId: "subscriber-1",
+          side: "buy",
+          tieBreakRule: "Best price",
+          quotes: []
+        });
+      }
+
+      if (url.endsWith("/pairs/pair-phase1-demo/dealers/dealer-alpha/history")) {
+        return jsonResponse({
+          pair: {
+            pairId: "pair-phase1-demo",
+            mode: "SingleDealerPair",
+            operatorId: "operator-demo",
+            dealerId: "dealer-alpha",
+            paused: false,
+            rulebookVersion: "v1",
+            approvalStatus: "approved",
+            attestationStatus: "attested"
+          },
+          dealerId: "dealer-alpha",
+          invitations: [],
+          quotes: [],
+          revisions: [],
+          withdrawals: []
+        });
+      }
+
+      if (url.endsWith("/pairs/pair-phase1-demo/views/operator-oversight")) {
+        return jsonResponse({
+          access: {
+            pairId: "pair-phase1-demo",
+            participants: []
+          },
+          audits: [],
+          dealerUniverse: ["dealer-alpha"],
+          executions: [],
+          health: {
+            title: "SingleDealerPair health",
+            status: "healthy",
+            detail: "Healthy",
+            summary: {
+              pairId: "pair-phase1-demo",
+              mode: "SingleDealerPair",
+              operatorId: "operator-demo",
+              dealers: ["dealer-alpha"],
+              paused: false,
+              rulebookVersion: "v1",
+              activeParticipantCount: 2,
+              ledgerFacts: ["RFQ sessions"],
+              offLedgerFacts: ["Transient UI state"]
+            },
+            violations: []
+          },
+          invitations: [],
+          inviteRevisionPolicy: "locked",
+          oversightRole: "full",
+          pair: {
+            pairId: "pair-phase1-demo",
+            mode: "SingleDealerPair",
+            operatorId: "operator-demo",
+            dealerId: "dealer-alpha",
+            paused: false,
+            rulebookVersion: "v1",
+            approvalStatus: "approved",
+            attestationStatus: "attested"
+          },
+          quoteLadders: [],
+          quotes: [],
+          revisions: [],
+          rfqs: [],
+          settlements: [],
+          withdrawals: []
+        });
       }
 
       if (url.endsWith("/pairs/pair-phase1-demo/settlements/settlement-1/progress")) {
@@ -223,6 +348,7 @@ describe("createVenueApiClient", () => {
         return jsonResponse({
           currentTime: "2026-04-02T00:10:00.000Z",
           dealerId: "dealer-alpha",
+          dealerIds: ["dealer-alpha"],
           mode: "phase1-complete",
           operatorId: "operator-demo",
           pairId: "pair-phase1-demo",
@@ -239,6 +365,7 @@ describe("createVenueApiClient", () => {
         return jsonResponse({
           currentTime: "2026-04-02T00:15:00.000Z",
           dealerId: "dealer-alpha",
+          dealerIds: ["dealer-alpha"],
           mode: "phase1-complete",
           operatorId: "operator-demo",
           pairId: "pair-phase1-demo",
@@ -297,6 +424,24 @@ describe("createVenueApiClient", () => {
     ).resolves.toBeUndefined();
 
     await expect(
+      client.inviteDealers({
+        actorId: "subscriber-1",
+        dealerIds: ["dealer-alpha", "dealer-beta"],
+        pairId: "pair-phase1-demo",
+        rfqId: "rfq-1"
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(
+      client.reviseInviteSet({
+        actorId: "subscriber-1",
+        dealerIds: ["dealer-alpha", "dealer-beta", "dealer-gamma"],
+        pairId: "pair-phase1-demo",
+        rfqId: "rfq-1"
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(
       client.submitQuote({
         actorId: "dealer-alpha",
         expiresAt: "2026-04-02T00:20:00.000Z",
@@ -304,6 +449,26 @@ describe("createVenueApiClient", () => {
         price: 100.5,
         quantity: 50,
         rfqId: "rfq-1"
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(
+      client.reviseQuote({
+        actorId: "dealer-alpha",
+        expiresAt: "2026-04-02T00:25:00.000Z",
+        pairId: "pair-phase1-demo",
+        price: 99.75,
+        quantity: 55,
+        quoteId: "quote-1"
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(
+      client.withdrawQuote({
+        actorId: "dealer-alpha",
+        pairId: "pair-phase1-demo",
+        quoteId: "quote-1",
+        reason: "manual pullback"
       })
     ).resolves.toBeUndefined();
 
@@ -316,6 +481,15 @@ describe("createVenueApiClient", () => {
     ).resolves.toBeUndefined();
 
     await expect(
+      client.rejectAllQuotes({
+        actorId: "subscriber-1",
+        pairId: "pair-phase1-demo",
+        reason: "no fill",
+        rfqId: "rfq-1"
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(
       client.markSettlementProgression({
         actorId: "operator-demo",
         instructionId: "settlement-1",
@@ -323,6 +497,35 @@ describe("createVenueApiClient", () => {
         status: "affirmed"
       })
     ).resolves.toBeUndefined();
+
+    await expect(
+      client.getSubscriberQuoteLadder({
+        actorId: "subscriber-1",
+        pairId: "pair-phase1-demo",
+        rfqId: "rfq-1"
+      })
+    ).resolves.toMatchObject({
+      pairId: "pair-phase1-demo"
+    });
+
+    await expect(
+      client.getDealerInvitationHistory({
+        actorId: "dealer-alpha",
+        dealerId: "dealer-alpha",
+        pairId: "pair-phase1-demo"
+      })
+    ).resolves.toMatchObject({
+      dealerId: "dealer-alpha"
+    });
+
+    await expect(
+      client.getOperatorOversightView({
+        actorId: "operator-demo",
+        pairId: "pair-phase1-demo"
+      })
+    ).resolves.toMatchObject({
+      oversightRole: "full"
+    });
 
     await expect(client.resetDemoState({ mode: "phase1-complete" })).resolves.toMatchObject({
       mode: "phase1-complete"

@@ -73,7 +73,7 @@ export type HealthResponse = {
   venue: VenueHealthReadModel;
 };
 
-export type DemoMode = "empty" | "phase1-complete" | "phase1-ready";
+export type DemoMode = "empty" | "phase1-complete" | "phase1-ready" | "phase2-ready";
 
 export type DemoResetRequest = {
   mode: DemoMode;
@@ -87,6 +87,7 @@ export type DemoClockAdvanceRequest = {
 export type DemoStatusResponse = {
   currentTime: string;
   dealerId: string;
+  dealerIds: readonly string[];
   mode: DemoMode;
   operatorId: string;
   pairId: string;
@@ -369,8 +370,10 @@ const quoteComparisonItemSchema = objectSchema<QuoteComparisonView["quotes"][num
 });
 
 const quoteComparisonViewSchema = objectSchema<QuoteComparisonView>({
+  invitations: arraySchema(invitationViewSchema),
   pairId: stringSchema(),
   rfqId: stringSchema(),
+  responseWindowClosesAt: optionalSchema(stringSchema()),
   subscriberId: stringSchema(),
   side: enumSchema(["buy", "sell"]),
   tieBreakRule: stringSchema(),
@@ -418,6 +421,7 @@ const operatorViewSchema = objectSchema<OperatorView>({
 });
 
 const subscriberViewSchema = objectSchema<SubscriberView>({
+  availableDealerIds: arraySchema(stringSchema()),
   pair: pairSummaryViewSchema,
   subscriberId: stringSchema(),
   entitlements: arraySchema(stringSchema()),
@@ -446,13 +450,19 @@ const dealerInvitationHistoryViewSchema = objectSchema<DealerInvitationHistoryVi
 });
 
 const operatorOversightViewSchema = objectSchema<OperatorOversightView>({
+  access: participantAccessSchema,
+  dealerUniverse: arraySchema(stringSchema()),
+  executions: arraySchema(executionViewSchema),
+  health: venueHealthSchema,
   pair: pairSummaryViewSchema,
+  inviteRevisionPolicy: enumSchema(["before_first_response", "locked"]),
   oversightRole: enumSchema(["blinded", "full"]),
   rfqs: arraySchema(rfqViewSchema),
   invitations: arraySchema(invitationViewSchema),
   quotes: arraySchema(operatorOversightQuoteSchema),
   quoteLadders: arraySchema(quoteComparisonViewSchema),
   revisions: arraySchema(quoteRevisionViewSchema),
+  settlements: arraySchema(settlementViewSchema),
   withdrawals: arraySchema(quoteWithdrawalViewSchema),
   audits: arraySchema(
     objectSchema<OperatorOversightView["audits"][number]>({
@@ -565,7 +575,7 @@ export const healthResponseSchema = objectSchema<HealthResponse>({
 });
 
 export const demoResetRequestSchema = objectSchema<DemoResetRequest>({
-  mode: enumSchema(["empty", "phase1-complete", "phase1-ready"]),
+  mode: enumSchema(["empty", "phase1-complete", "phase1-ready", "phase2-ready"]),
   seed: optionalSchema(numberSchema())
 });
 
@@ -575,7 +585,8 @@ export const demoClockAdvanceRequestSchema = objectSchema<DemoClockAdvanceReques
 
 export const demoStatusResponseSchema = objectSchema<DemoStatusResponse>({
   currentTime: stringSchema(),
-  mode: enumSchema(["empty", "phase1-complete", "phase1-ready"]),
+  dealerIds: arraySchema(stringSchema()),
+  mode: enumSchema(["empty", "phase1-complete", "phase1-ready", "phase2-ready"]),
   seed: numberSchema(),
   pairId: stringSchema(),
   operatorId: stringSchema(),

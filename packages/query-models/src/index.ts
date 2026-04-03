@@ -119,9 +119,11 @@ export type QuoteComparisonItemView = {
 };
 
 export type QuoteComparisonView = {
+  invitations: readonly DealerInvitationView[];
   pairId: string;
   quotes: readonly QuoteComparisonItemView[];
   rfqId: string;
+  responseWindowClosesAt?: string;
   side: RFQSession["side"];
   subscriberId: string;
   tieBreakRule: string;
@@ -149,14 +151,20 @@ export type OperatorOversightQuoteView = {
 };
 
 export type OperatorOversightView = {
+  access: ParticipantAccessView;
   audits: readonly AuditTrailEntryView[];
+  dealerUniverse: readonly string[];
+  executions: readonly ExecutionTicketView[];
+  health: VenueHealthReadModel;
   invitations: readonly DealerInvitationView[];
+  inviteRevisionPolicy: PairInstance["inviteRevisionPolicy"];
   oversightRole: PairInstance["operatorOversightRole"];
   pair: PairSummaryView;
   quoteLadders: readonly QuoteComparisonView[];
   quotes: readonly OperatorOversightQuoteView[];
   revisions: readonly QuoteRevisionView[];
   rfqs: readonly RFQSessionView[];
+  settlements: readonly SettlementInstructionView[];
   withdrawals: readonly QuoteWithdrawalView[];
 };
 
@@ -180,6 +188,7 @@ export type OperatorView = {
 };
 
 export type SubscriberView = {
+  availableDealerIds: readonly string[];
   canOpenRfq: boolean;
   entitlements: readonly string[];
   executions: readonly ExecutionTicketView[];
@@ -416,6 +425,7 @@ export const projectSubscriberView = (input: {
   );
 
   return {
+    availableDealerIds: listPairDealerIds(input.pair),
     pair: projectPairSummary(input.pair),
     subscriberId: input.subscriberId,
     entitlements,
@@ -465,6 +475,7 @@ export const projectDealerWorkbenchView = (input: {
 });
 
 export const projectSubscriberQuoteLadder = (input: {
+  invitations: readonly DealerInvitation[];
   pair: PairInstance;
   quotes: readonly DealerQuote[];
   rfq: RFQSession;
@@ -482,8 +493,15 @@ export const projectSubscriberQuoteLadder = (input: {
   );
 
   return {
+    invitations: input.invitations
+      .filter((invitation) => invitation.rfqId === input.rfq.rfqId)
+      .sort(sortByInvitedAt)
+      .map(projectInvitation),
     pairId: input.pair.pairId,
     rfqId: input.rfq.rfqId,
+    ...(input.rfq.responseWindowClosesAt !== undefined
+      ? { responseWindowClosesAt: input.rfq.responseWindowClosesAt }
+      : {}),
     subscriberId: input.rfq.subscriberId,
     side: input.rfq.side,
     tieBreakRule: quoteTieBreakRule,
@@ -534,11 +552,14 @@ export const projectDealerInvitationHistory = (input: {
 
 export const projectOperatorOversightView = (input: {
   auditEntries: readonly AuditRecord[];
+  executions: readonly ExecutionTicket[];
+  grants: readonly AccessGrant[];
   invitations: readonly DealerInvitation[];
   pair: PairInstance;
   quotes: readonly DealerQuote[];
   revisions: readonly QuoteRevision[];
   rfqs: readonly RFQSession[];
+  settlements: readonly SettlementInstruction[];
   withdrawals: readonly QuoteWithdrawal[];
 }): OperatorOversightView => {
   const ladders =
@@ -549,6 +570,7 @@ export const projectOperatorOversightView = (input: {
           .sort(sortByCreatedAt)
           .map((rfq) =>
             projectSubscriberQuoteLadder({
+              invitations: input.invitations,
               pair: input.pair,
               rfq,
               quotes: input.quotes
@@ -556,7 +578,12 @@ export const projectOperatorOversightView = (input: {
           );
 
   return {
+    access: projectParticipantAccess(input.pair.pairId, input.grants),
     pair: projectPairSummary(input.pair),
+    dealerUniverse: listPairDealerIds(input.pair),
+    executions: [...input.executions].sort(sortByAcceptedAt).map(projectExecution),
+    health: projectVenueHealth(input.pair, input.grants),
+    inviteRevisionPolicy: input.pair.inviteRevisionPolicy,
     oversightRole: input.pair.operatorOversightRole,
     rfqs: [...input.rfqs].sort(sortByCreatedAt).map(projectRfq),
     invitations: [...input.invitations].sort(sortByInvitedAt).map(projectInvitation),
@@ -583,6 +610,7 @@ export const projectOperatorOversightView = (input: {
     })),
     quoteLadders: ladders,
     revisions: [...input.revisions].sort(sortByRevisionAt),
+    settlements: [...input.settlements].sort(sortByCreatedAt).map(projectSettlement),
     withdrawals: [...input.withdrawals].sort(sortByWithdrawalAt),
     audits: projectAuditTrail(input.pair.pairId, input.auditEntries).entries
   };

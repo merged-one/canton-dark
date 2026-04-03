@@ -7,7 +7,8 @@ const port = Number(process.env.PORT ?? 4301);
 const api = await createVenueApiApp({
   ...((process.env.VENUE_API_BOOTSTRAP_MODE === "empty" ||
     process.env.VENUE_API_BOOTSTRAP_MODE === "phase1-complete" ||
-    process.env.VENUE_API_BOOTSTRAP_MODE === "phase1-ready") && {
+    process.env.VENUE_API_BOOTSTRAP_MODE === "phase1-ready" ||
+    process.env.VENUE_API_BOOTSTRAP_MODE === "phase2-ready") && {
     bootstrapMode: process.env.VENUE_API_BOOTSTRAP_MODE
   }),
   ...(process.env.VENUE_API_SEED === undefined

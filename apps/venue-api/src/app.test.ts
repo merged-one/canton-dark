@@ -509,6 +509,7 @@ describe("venue-api", () => {
       body: {
         currentTime: "2026-04-02T00:00:00.000Z",
         dealerId: "dealer-alpha",
+        dealerIds: ["dealer-alpha"],
         mode: "empty",
         operatorId: "operator-demo",
         pairId: "pair-phase1-demo",
@@ -530,6 +531,7 @@ describe("venue-api", () => {
       body: {
         currentTime: "2026-04-02T00:00:05.000Z",
         dealerId: "dealer-alpha",
+        dealerIds: ["dealer-alpha"],
         mode: "phase1-complete",
         operatorId: "operator-demo",
         pairId: "pair-phase1-demo",
@@ -551,6 +553,7 @@ describe("venue-api", () => {
       body: {
         currentTime: "2026-04-02T00:05:05.000Z",
         dealerId: "dealer-alpha",
+        dealerIds: ["dealer-alpha"],
         mode: "phase1-complete",
         operatorId: "operator-demo",
         pairId: "pair-phase1-demo",

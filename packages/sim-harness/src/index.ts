@@ -3,7 +3,14 @@ import {
   type DeterministicClock,
   type MemoryVenueEnvironment
 } from "@canton-dark/adapters-memory";
-import type { ParticipantRole, RFQSide, SettlementStatus } from "@canton-dark/domain-core";
+import type {
+  InviteRevisionPolicy,
+  OperatorOversightRole,
+  PairMode,
+  ParticipantRole,
+  RFQSide,
+  SettlementStatus
+} from "@canton-dark/domain-core";
 import { createReplayMetadata } from "@canton-dark/testkit";
 
 export type SeededRandom = {
@@ -20,10 +27,14 @@ export type Persona = {
 
 export type CreatePairScenarioCommand = {
   alias: string;
-  dealerId: string;
+  dealerId?: string;
+  dealerIds?: readonly string[];
+  inviteRevisionPolicy?: InviteRevisionPolicy;
   jurisdiction: string;
   kind: "create_pair";
+  mode?: PairMode;
   operatorId: string;
+  operatorOversightRole?: OperatorOversightRole;
   pairId?: string;
   rulebookSummary: string;
   rulebookVersion: string;
@@ -105,10 +116,21 @@ export type ScenarioResult = {
 };
 
 export type Phase1DemoMode = "empty" | "phase1-complete" | "phase1-ready";
+export type Phase2DemoMode = "phase2-ready";
 
 export type Phase1DemoSeedResult = ScenarioResult & {
   dealerId: string;
+  dealerIds: readonly string[];
   mode: Phase1DemoMode;
+  operatorId: string;
+  pairId: string;
+  subscriberId: string;
+};
+
+export type Phase2DemoSeedResult = ScenarioResult & {
+  dealerId: string;
+  dealerIds: readonly string[];
+  mode: Phase2DemoMode;
   operatorId: string;
   pairId: string;
   subscriberId: string;
@@ -116,8 +138,17 @@ export type Phase1DemoSeedResult = ScenarioResult & {
 
 export const phase1DemoDefaults = {
   dealerId: "dealer-alpha",
+  dealerIds: ["dealer-alpha"],
   operatorId: "operator-demo",
   pairId: "pair-phase1-demo",
+  subscriberId: "subscriber-1"
+} as const;
+
+export const phase2DemoDefaults = {
+  dealerId: "dealer-alpha",
+  dealerIds: ["dealer-alpha", "dealer-beta", "dealer-gamma"],
+  operatorId: "operator-demo",
+  pairId: "pair-phase2-demo",
   subscriberId: "subscriber-1"
 } as const;
 
@@ -257,8 +288,16 @@ const executeScenario = async (
           const pair = await environment.application.createPair({
             actorId: step.actor.participantId,
             operatorId: step.command.operatorId,
-            dealerId: step.command.dealerId,
             jurisdiction: step.command.jurisdiction,
+            ...(step.command.mode !== undefined ? { mode: step.command.mode } : {}),
+            ...(step.command.dealerId !== undefined ? { dealerId: step.command.dealerId } : {}),
+            ...(step.command.dealerIds !== undefined ? { dealerIds: step.command.dealerIds } : {}),
+            ...(step.command.operatorOversightRole !== undefined
+              ? { operatorOversightRole: step.command.operatorOversightRole }
+              : {}),
+            ...(step.command.inviteRevisionPolicy !== undefined
+              ? { inviteRevisionPolicy: step.command.inviteRevisionPolicy }
+              : {}),
             ...(step.command.pairId !== undefined ? { pairId: step.command.pairId } : {}),
             rulebookVersion: step.command.rulebookVersion,
             rulebookSummary: step.command.rulebookSummary
@@ -370,6 +409,7 @@ export const createPhase1DemoSteps = (mode: Phase1DemoMode): readonly ScenarioSt
         pairId: phase1DemoDefaults.pairId,
         operatorId: phase1DemoDefaults.operatorId,
         dealerId: phase1DemoDefaults.dealerId,
+        dealerIds: phase1DemoDefaults.dealerIds,
         jurisdiction: "US",
         rulebookVersion: "v1",
         rulebookSummary: "initial"
@@ -460,7 +500,71 @@ export const seedPhase1DemoEnvironment = async (
     pairId: phase1DemoDefaults.pairId,
     operatorId: phase1DemoDefaults.operatorId,
     dealerId: phase1DemoDefaults.dealerId,
+    dealerIds: phase1DemoDefaults.dealerIds,
     subscriberId: phase1DemoDefaults.subscriberId
+  };
+};
+
+export const createPhase2DemoSteps = (): readonly ScenarioStep[] => [
+  {
+    atMs: 0,
+    actor: persona.operator(phase2DemoDefaults.operatorId, "Operator"),
+    command: {
+      kind: "create_pair",
+      alias: "pair",
+      pairId: phase2DemoDefaults.pairId,
+      operatorId: phase2DemoDefaults.operatorId,
+      mode: "ATSPair",
+      dealerIds: phase2DemoDefaults.dealerIds,
+      operatorOversightRole: "blinded",
+      inviteRevisionPolicy: "before_first_response",
+      jurisdiction: "US",
+      rulebookVersion: "v2",
+      rulebookSummary: "phase 2 ats demo"
+    }
+  },
+  {
+    atMs: 1_000,
+    actor: persona.operator(phase2DemoDefaults.operatorId),
+    command: {
+      kind: "grant_access",
+      pairAlias: "pair",
+      role: "subscriber",
+      subjectId: phase2DemoDefaults.subscriberId
+    }
+  },
+  ...phase2DemoDefaults.dealerIds.map((dealerId, index) => ({
+    atMs: 2_000 + index * 1_000,
+    actor: persona.operator(phase2DemoDefaults.operatorId),
+    command: {
+      kind: "grant_access" as const,
+      pairAlias: "pair",
+      role: "dealer" as const,
+      subjectId: dealerId
+    }
+  }))
+];
+
+export const seedPhase2DemoEnvironment = async (
+  environment: MemoryVenueEnvironment,
+  input: {
+    mode: Phase2DemoMode;
+    seed: number;
+  }
+): Promise<Phase2DemoSeedResult> => {
+  const result = await executeScenario(environment, {
+    seed: input.seed,
+    steps: createPhase2DemoSteps()
+  });
+
+  return {
+    ...result,
+    mode: input.mode,
+    pairId: phase2DemoDefaults.pairId,
+    operatorId: phase2DemoDefaults.operatorId,
+    dealerId: phase2DemoDefaults.dealerId,
+    dealerIds: phase2DemoDefaults.dealerIds,
+    subscriberId: phase2DemoDefaults.subscriberId
   };
 };
 
