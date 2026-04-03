@@ -18,5 +18,6 @@ describe("app-services transport contract", () => {
 
     expect(response.venue.summary.operatorId).toBe("operator-3");
     expect(response.venue.summary.mode).toBe("SingleDealerPair");
+    expect(response.venue.summary.pairId).toBe("draft-preview");
   });
 });

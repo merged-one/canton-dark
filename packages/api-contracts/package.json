@@ -6,6 +6,11 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "lint": "eslint src vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:unit": "VITEST_MODE=unit vitest run --coverage --config vitest.config.ts"
+  },
   "dependencies": {
     "@canton-dark/query-models": "workspace:*"
   }

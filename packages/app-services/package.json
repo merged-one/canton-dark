@@ -10,11 +10,13 @@
     "lint": "eslint src vitest.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:unit": "VITEST_MODE=unit vitest run --coverage --config vitest.config.ts",
+    "test:property": "VITEST_MODE=property vitest run --config vitest.config.ts",
     "test:contract": "VITEST_MODE=contract vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@canton-dark/api-contracts": "workspace:*",
     "@canton-dark/domain-core": "workspace:*",
-    "@canton-dark/query-models": "workspace:*"
+    "@canton-dark/query-models": "workspace:*",
+    "@canton-dark/testkit": "workspace:*"
   }
 }

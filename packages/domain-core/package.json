@@ -9,6 +9,10 @@
   "scripts": {
     "lint": "eslint src vitest.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test:unit": "VITEST_MODE=unit vitest run --coverage --config vitest.config.ts"
+    "test:unit": "VITEST_MODE=unit vitest run --coverage --config vitest.config.ts",
+    "test:property": "VITEST_MODE=property vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@canton-dark/testkit": "workspace:*"
   }
 }

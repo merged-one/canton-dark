@@ -12,6 +12,7 @@
     "test:unit": "VITEST_MODE=unit vitest run --coverage --config vitest.config.ts"
   },
   "dependencies": {
+    "@canton-dark/app-services": "workspace:*",
     "@canton-dark/domain-core": "workspace:*"
   }
 }

@@ -5,6 +5,12 @@ export type DeterministicPropertyConfig = {
   seed: number;
 };
 
+export type ReplayMetadata = {
+  command: string;
+  path?: string;
+  seed: number;
+};
+
 export const createDeterministicPropertyConfig = (
   overrides: Partial<DeterministicPropertyConfig> = {}
 ): DeterministicPropertyConfig => {
@@ -25,3 +31,9 @@ export const describeReplayCommand = (seed: number, path?: string): string =>
   path
     ? `pnpm test:property:replay --seed ${seed} --path ${path}`
     : `pnpm test:property:replay --seed ${seed}`;
+
+export const createReplayMetadata = (seed: number, path?: string): ReplayMetadata => ({
+  seed,
+  ...(path !== undefined ? { path } : {}),
+  command: describeReplayCommand(seed, path)
+});

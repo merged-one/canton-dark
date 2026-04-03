@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createDeterministicPropertyConfig, describeReplayCommand } from "./index";
+import {
+  createDeterministicPropertyConfig,
+  createReplayMetadata,
+  describeReplayCommand
+} from "./index";
 
 const originalEnv = {
   FC_NUM_RUNS: process.env.FC_NUM_RUNS,
@@ -60,5 +64,19 @@ describe("describeReplayCommand", () => {
     expect(describeReplayCommand(424242, "17:3")).toBe(
       "pnpm test:property:replay --seed 424242 --path 17:3"
     );
+  });
+});
+
+describe("createReplayMetadata", () => {
+  it("packages replay metadata for logs and failure messages", () => {
+    expect(createReplayMetadata(424242)).toEqual({
+      seed: 424242,
+      command: "pnpm test:property:replay --seed 424242"
+    });
+    expect(createReplayMetadata(424242, "17:3")).toEqual({
+      seed: 424242,
+      path: "17:3",
+      command: "pnpm test:property:replay --seed 424242 --path 17:3"
+    });
   });
 });

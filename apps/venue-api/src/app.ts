@@ -1,7 +1,15 @@
 import { createInMemoryVenueRegistry } from "@canton-dark/adapters-memory";
 import type { HealthResponse, ValidateVenueResponse } from "@canton-dark/api-contracts";
 import { buildVenueHealthResponse } from "@canton-dark/app-services";
-import type { VenueConfigurationDraft, VenueMode } from "@canton-dark/domain-core";
+
+type VenueMode = "ATSPair" | "SingleDealerPair";
+
+type VenueConfigurationDraft = {
+  dealers: string[];
+  marketingLabel: string;
+  mode: VenueMode;
+  operatorId: string;
+};
 
 type ApiReply = {
   body: object;

@@ -86,12 +86,18 @@ importers:
 
   packages/adapters-canton:
     dependencies:
+      '@canton-dark/app-services':
+        specifier: workspace:*
+        version: link:../app-services
       '@canton-dark/domain-core':
         specifier: workspace:*
         version: link:../domain-core
 
   packages/adapters-memory:
     dependencies:
+      '@canton-dark/app-services':
+        specifier: workspace:*
+        version: link:../app-services
       '@canton-dark/domain-core':
         specifier: workspace:*
         version: link:../domain-core
@@ -113,8 +119,15 @@ importers:
       '@canton-dark/query-models':
         specifier: workspace:*
         version: link:../query-models
+      '@canton-dark/testkit':
+        specifier: workspace:*
+        version: link:../testkit
 
-  packages/domain-core: {}
+  packages/domain-core:
+    dependencies:
+      '@canton-dark/testkit':
+        specifier: workspace:*
+        version: link:../testkit
 
   packages/query-models:
     dependencies:
@@ -124,6 +137,9 @@ importers:
 
   packages/sim-harness:
     dependencies:
+      '@canton-dark/adapters-memory':
+        specifier: workspace:*
+        version: link:../adapters-memory
       '@canton-dark/app-services':
         specifier: workspace:*
         version: link:../app-services

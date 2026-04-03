@@ -64,11 +64,20 @@ describe("venue-api", () => {
         status: "healthy",
         detail: "Operator operator-demo has 1 directed dealer configuration(s).",
         summary: {
+          pairId: "draft-preview",
           mode: "SingleDealerPair",
           operatorId: "operator-demo",
           dealers: ["dealer-alpha"],
-          ledgerFacts: ["Shared RFQ state"],
-          offLedgerFacts: ["Operator query cache", "Operator analytics", "Transient UI state"]
+          paused: false,
+          rulebookVersion: "draft",
+          activeParticipantCount: 2,
+          ledgerFacts: ["Shared RFQ state", "Shared execution state"],
+          offLedgerFacts: [
+            "Operator query cache",
+            "Operator analytics",
+            "Telemetry projection",
+            "Transient UI state"
+          ]
         },
         violations: []
       }

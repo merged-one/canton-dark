@@ -10,6 +10,7 @@ describe("ui-kit helpers", () => {
 
   it("maps venue status to a tone class", () => {
     expect(statusToneClass("healthy")).toBe("tone-ok");
+    expect(statusToneClass("paused")).toBe("tone-warn");
     expect(statusToneClass("rejected")).toBe("tone-alert");
   });
 });

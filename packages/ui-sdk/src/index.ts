@@ -21,6 +21,9 @@ export const renderVenueHealthHtml = (response: HealthResponse): string => {
     <article data-testid="health-card" class="${statusToneClass(response.venue.status)}">
       <h2>${escapeHtml(response.venue.title)}</h2>
       <p>${escapeHtml(response.venue.detail)}</p>
+      <p>Pair: ${escapeHtml(response.venue.summary.pairId)}</p>
+      <p>Rulebook: ${escapeHtml(response.venue.summary.rulebookVersion)}</p>
+      <p>Active participants: ${response.venue.summary.activeParticipantCount}</p>
       <p>Dealers: ${escapeHtml(joinList(response.venue.summary.dealers))}</p>
       <p>On-ledger: ${escapeHtml(joinList(response.venue.summary.ledgerFacts))}</p>
       <p>Off-ledger: ${escapeHtml(joinList(response.venue.summary.offLedgerFacts))}</p>

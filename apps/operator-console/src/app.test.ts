@@ -12,9 +12,13 @@ const responsePayload: HealthResponse = {
     status: "healthy",
     detail: "Operator operator-1 has 1 directed dealer configured.",
     summary: {
+      pairId: "pair-1",
       mode: "SingleDealerPair",
       operatorId: "operator-1",
       dealers: ["dealer-alpha"],
+      paused: false,
+      rulebookVersion: "v1",
+      activeParticipantCount: 2,
       ledgerFacts: ["Shared RFQ state"],
       offLedgerFacts: ["Operator analytics"]
     },
