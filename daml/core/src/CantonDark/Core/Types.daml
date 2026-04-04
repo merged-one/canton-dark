@@ -1,6 +1,6 @@
 module CantonDark.Core.Types where
 
-import DA.List (elem, nub, sort)
+import DA.List (sort)
 
 data PairMode
   = ATSPair
@@ -115,37 +115,57 @@ data SettlementStatus
   | SettlementSettled
   deriving (Eq, Ord, Show)
 
-data OperatorApprovalData = OperatorApprovalData with
+data OperatorApprovalData = OperatorApprovalData
+  with
   approvedAt : Time
   approvedBy : Party
   note : Optional Text
   status : ApprovalStatus
-  deriving (Eq, Show)
 
-data RegulatoryAttestationData = RegulatoryAttestationData with
+deriving instance Eq OperatorApprovalData
+deriving instance Show OperatorApprovalData
+
+data RegulatoryAttestationData = RegulatoryAttestationData
+  with
   attestedAt : Time
   attestedBy : Party
   jurisdiction : Text
   status : AttestationStatus
-  deriving (Eq, Show)
 
-data RulebookReleaseData = RulebookReleaseData with
+deriving instance Eq RegulatoryAttestationData
+deriving instance Show RegulatoryAttestationData
+
+data RulebookReleaseData = RulebookReleaseData
+  with
   effectiveAt : Time
   publishedBy : Party
   releaseId : Text
   summary : Text
   version : Text
-  deriving (Eq, Show)
 
-data PauseStateData = PauseStateData with
+deriving instance Eq RulebookReleaseData
+deriving instance Show RulebookReleaseData
+
+data PauseStateData = PauseStateData
+  with
   changedAt : Time
   changedBy : Party
   reason : Optional Text
   state : PauseStatus
-  deriving (Eq, Show)
+
+deriving instance Eq PauseStateData
+deriving instance Show PauseStateData
+
+dedupeSorted : Eq a => [a] -> [a]
+dedupeSorted remaining =
+  case remaining of
+    [] -> []
+    [value] -> [value]
+    left :: right :: rest ->
+      if left == right then dedupeSorted (right :: rest) else left :: dedupeSorted (right :: rest)
 
 uniqueSorted : Ord a => [a] -> [a]
-uniqueSorted values = nub (sort values)
+uniqueSorted values = dedupeSorted (sort values)
 
 operatorObservers : OperatorOversightRole -> Party -> [Party]
 operatorObservers oversightRole operator =

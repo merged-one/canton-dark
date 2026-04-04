@@ -5,24 +5,28 @@ import DA.List (elem)
 import CantonDark.Core.Types
 import qualified CantonDark.Phase2.ATSRfq as Phase2
 
-data DarkOrderSubmission = DarkOrderSubmission with
+data DarkOrderSubmission = DarkOrderSubmission
+  with
   orderCid : ContractId DarkOrder
 
-data MatchCreation = MatchCreation with
+data MatchCreation = MatchCreation
+  with
   buyLockCid : ContractId OrderLock
   buyOrderCid : ContractId DarkOrder
   proposalCid : ContractId MatchProposal
   sellLockCid : ContractId OrderLock
   sellOrderCid : ContractId DarkOrder
 
-data MatchLifecycleUpdate = MatchLifecycleUpdate with
+data MatchLifecycleUpdate = MatchLifecycleUpdate
+  with
   buyLockCid : ContractId OrderLock
   buyOrderCid : ContractId DarkOrder
   proposalCid : ContractId MatchProposal
   sellLockCid : ContractId OrderLock
   sellOrderCid : ContractId DarkOrder
 
-data DarkExecutionResult = DarkExecutionResult with
+data DarkExecutionResult = DarkExecutionResult
+  with
   buyLockCid : ContractId OrderLock
   buyOrderCid : ContractId DarkOrder
   executionTicketCid : ContractId ExecutionTicket
@@ -47,11 +51,35 @@ optionalPartyObservers maybeParty =
     None -> []
     Some party -> [party]
 
-fetchPair : Party -> Text -> Update Phase2.PairInstance
-fetchPair operator pairId = do
-  maybePairCid <- lookupByKey @Phase2.PairInstance (operator, pairId)
-  pairCid <- lookupOrFail "Pair was not found." maybePairCid
-  fetch pairCid
+assertPairReference : Party -> Text -> Phase2.PairInstance -> Update ()
+assertPairReference operator pairId pair =
+  assertMsg
+    "Pair reference does not match the dark pool."
+    (pair.operator == operator && pair.pairId == pairId)
+
+assertGrantReference :
+  Party ->
+  Text ->
+  Party ->
+  ParticipantRole ->
+  Phase2.AccessGrant ->
+  Update ()
+assertGrantReference operator pairId subject role grant =
+  assertMsg
+    "Access grant reference does not match the requested participant."
+    (grant.operator == operator && grant.pairId == pairId && grant.subject == subject && grant.role == role)
+
+assertDarkOrderReference : Text -> Party -> Text -> Text -> DarkOrder -> Update ()
+assertDarkOrderReference label operator pairId orderId order =
+  assertMsg
+    (label <> " order reference does not match the expected order.")
+    (order.operator == operator && order.pairId == pairId && order.orderId == orderId)
+
+assertOrderLockReference : Text -> Party -> Text -> Text -> OrderLock -> Update ()
+assertOrderLockReference label operator pairId lockId lock =
+  assertMsg
+    (label <> " order lock reference does not match the expected lock.")
+    (lock.operator == operator && lock.pairId == pairId && lock.lockId == lockId)
 
 assertDarkPair : Phase2.PairInstance -> Update ()
 assertDarkPair pair = do
@@ -116,25 +144,25 @@ template DarkPool
 
     ensure pairId /= ""
 
-    key (operator, pairId) : (Party, Text)
-    maintainer key._1
-
     nonconsuming choice SubmitDarkOrder : DarkOrderSubmission
       with
         clientOrderId : Text
+        existingOrderCid : Optional (ContractId DarkOrder)
         expiresAt : Optional Time
         instrumentId : Text
         limitPrice : Decimal
         orderId : Text
+        pairCid : ContractId Phase2.PairInstance
         quantity : Decimal
         side : RFQSide
         subscriber : Party
+        subscriberGrantCid : ContractId Phase2.AccessGrant
       controller subscriber
       do
-        pair <- fetchPair operator pairId
-        maybeGrantCid <- lookupByKey @Phase2.AccessGrant (operator, pairId, subscriber, SubscriberRole)
-        grantCid <- lookupOrFail "Subscriber access grant was not found." maybeGrantCid
-        grant <- fetch grantCid
+        pair <- fetch pairCid
+        assertPairReference operator pairId pair
+        grant <- fetch subscriberGrantCid
+        assertGrantReference operator pairId subscriber SubscriberRole grant
         now <- getTime
         assertDarkPair pair
         assertSubmitGrant grant
@@ -149,10 +177,10 @@ template DarkPool
             assertMsg
               "Dark order expiry must be later than creation time."
               (expiry > now)
-        maybeExistingCid <- lookupByKey @DarkOrder (operator, pairId, orderId)
-        case maybeExistingCid of
+        case existingOrderCid of
           Some existingCid -> do
             existing <- fetch existingCid
+            assertDarkOrderReference "Existing" operator pairId orderId existing
             assertMsg
               "Duplicate dark submissions must keep the same client order id and owner."
               (existing.clientOrderId == clientOrderId && existing.subscriber == subscriber)
@@ -185,14 +213,18 @@ template DarkPool
     nonconsuming choice CreateMatchProposal : MatchCreation
       with
         buyLockId : Text
+        buyOrderCid : ContractId DarkOrder
         buyOrderId : Text
         expiresAt : Time
+        pairCid : ContractId Phase2.PairInstance
         proposalId : Text
+        sellOrderCid : ContractId DarkOrder
         sellLockId : Text
         sellOrderId : Text
       controller operator
       do
-        pair <- fetchPair operator pairId
+        pair <- fetch pairCid
+        assertPairReference operator pairId pair
         now <- getTime
         assertDarkPair pair
         assertNonEmpty "proposalId" proposalId
@@ -201,12 +233,10 @@ template DarkPool
         assertNonEmpty "buyLockId" buyLockId
         assertNonEmpty "sellLockId" sellLockId
         assertMsg "Proposal expiry must be later than proposal creation time." (expiresAt > now)
-        maybeBuyOrderCid <- lookupByKey @DarkOrder (operator, pairId, buyOrderId)
-        buyOrderCid <- lookupOrFail "Buy dark order was not found." maybeBuyOrderCid
-        maybeSellOrderCid <- lookupByKey @DarkOrder (operator, pairId, sellOrderId)
-        sellOrderCid <- lookupOrFail "Sell dark order was not found." maybeSellOrderCid
         buyOrder <- fetch buyOrderCid
         sellOrder <- fetch sellOrderCid
+        assertDarkOrderReference "Buy" operator pairId buyOrderId buyOrder
+        assertDarkOrderReference "Sell" operator pairId sellOrderId sellOrder
         assertOrderOpenForMatch now "Buy" buyOrder
         assertOrderOpenForMatch now "Sell" sellOrder
         assertMsg "Match proposals require distinct dark orders." (buyOrderId /= sellOrderId)
@@ -328,15 +358,13 @@ template DarkOrder
           None -> True
           Some expiry -> expiry > createdAt
 
-    key (operator, pairId, orderId) : (Party, Text, Text)
-    maintainer key._1
-
     choice Cancel : ContractId DarkOrder
+      with
+        subscriberGrantCid : ContractId Phase2.AccessGrant
       controller subscriber
       do
-        maybeGrantCid <- lookupByKey @Phase2.AccessGrant (operator, pairId, subscriber, SubscriberRole)
-        grantCid <- lookupOrFail "Subscriber access grant was not found." maybeGrantCid
-        grant <- fetch grantCid
+        grant <- fetch subscriberGrantCid
+        assertGrantReference operator pairId subscriber SubscriberRole grant
         now <- getTime
         assertSubmitGrant grant
         assertMsg "Only open dark orders may be cancelled." (status == DarkOpen)
@@ -384,9 +412,6 @@ template OrderLock
 
     ensure pairId /= "" && lockId /= "" && orderId /= "" && proposalId /= "" && lockExpiresAt > lockedAt
 
-    key (operator, pairId, lockId) : (Party, Text, Text)
-    maintainer key._1
-
 template MatchProposal
   with
     operator : Party
@@ -429,17 +454,14 @@ template MatchProposal
         && buySubscriber /= sellSubscriber
         && expiresAt > createdAt
 
-    key (operator, pairId, proposalId) : (Party, Text, Text)
-    maintainer key._1
-
     choice Accept : ContractId MatchProposal
       with
         actor : Party
+        actorGrantCid : ContractId Phase2.AccessGrant
       controller actor
       do
-        maybeGrantCid <- lookupByKey @Phase2.AccessGrant (operator, pairId, actor, SubscriberRole)
-        grantCid <- lookupOrFail "Subscriber access grant was not found." maybeGrantCid
-        grant <- fetch grantCid
+        grant <- fetch actorGrantCid
+        assertGrantReference operator pairId actor SubscriberRole grant
         now <- getTime
         assertAcceptGrant grant
         assertMsg "Only proposal counterparties may accept." (actor == buySubscriber || actor == sellSubscriber)
@@ -466,12 +488,16 @@ template MatchProposal
     choice Reject : MatchLifecycleUpdate
       with
         actor : Party
+        actorGrantCid : ContractId Phase2.AccessGrant
+        buyLockCid : ContractId OrderLock
+        buyOrderCid : ContractId DarkOrder
         reason : Optional Text
+        sellLockCid : ContractId OrderLock
+        sellOrderCid : ContractId DarkOrder
       controller actor
       do
-        maybeGrantCid <- lookupByKey @Phase2.AccessGrant (operator, pairId, actor, SubscriberRole)
-        grantCid <- lookupOrFail "Subscriber access grant was not found." maybeGrantCid
-        grant <- fetch grantCid
+        grant <- fetch actorGrantCid
+        assertGrantReference operator pairId actor SubscriberRole grant
         now <- getTime
         assertAcceptGrant grant
         assertMsg "Only proposal counterparties may reject." (actor == buySubscriber || actor == sellSubscriber)
@@ -480,18 +506,14 @@ template MatchProposal
           None -> pure ()
           Some rejectionReason ->
             assertMsg "Rejection reason must not be empty." (rejectionReason /= "")
-        maybeBuyOrderCid <- lookupByKey @DarkOrder (operator, pairId, buyOrderId)
-        buyOrderCid <- lookupOrFail "Buy dark order was not found." maybeBuyOrderCid
-        maybeSellOrderCid <- lookupByKey @DarkOrder (operator, pairId, sellOrderId)
-        sellOrderCid <- lookupOrFail "Sell dark order was not found." maybeSellOrderCid
-        maybeBuyLockCid <- lookupByKey @OrderLock (operator, pairId, buyLockId)
-        buyLockCid <- lookupOrFail "Buy order lock was not found." maybeBuyLockCid
-        maybeSellLockCid <- lookupByKey @OrderLock (operator, pairId, sellLockId)
-        sellLockCid <- lookupOrFail "Sell order lock was not found." maybeSellLockCid
         buyOrder <- fetch buyOrderCid
         sellOrder <- fetch sellOrderCid
         buyLock <- fetch buyLockCid
         sellLock <- fetch sellLockCid
+        assertDarkOrderReference "Buy" operator pairId buyOrderId buyOrder
+        assertDarkOrderReference "Sell" operator pairId sellOrderId sellOrder
+        assertOrderLockReference "Buy" operator pairId buyLockId buyLock
+        assertOrderLockReference "Sell" operator pairId sellLockId sellLock
         archive buyOrderCid
         archive sellOrderCid
         archive buyLockCid
@@ -534,6 +556,11 @@ template MatchProposal
           sellOrderCid = nextSellOrderCid
 
     choice ReleaseExpired : MatchLifecycleUpdate
+      with
+        buyLockCid : ContractId OrderLock
+        buyOrderCid : ContractId DarkOrder
+        sellLockCid : ContractId OrderLock
+        sellOrderCid : ContractId DarkOrder
       controller operator
       do
         now <- getTime
@@ -541,18 +568,14 @@ template MatchProposal
           "Only pending or accepted proposals may release expired locks."
           (status == ProposalPending || status == ProposalAccepted)
         assertMsg "The proposal lock window is still active." (now >= expiresAt)
-        maybeBuyOrderCid <- lookupByKey @DarkOrder (operator, pairId, buyOrderId)
-        buyOrderCid <- lookupOrFail "Buy dark order was not found." maybeBuyOrderCid
-        maybeSellOrderCid <- lookupByKey @DarkOrder (operator, pairId, sellOrderId)
-        sellOrderCid <- lookupOrFail "Sell dark order was not found." maybeSellOrderCid
-        maybeBuyLockCid <- lookupByKey @OrderLock (operator, pairId, buyLockId)
-        buyLockCid <- lookupOrFail "Buy order lock was not found." maybeBuyLockCid
-        maybeSellLockCid <- lookupByKey @OrderLock (operator, pairId, sellLockId)
-        sellLockCid <- lookupOrFail "Sell order lock was not found." maybeSellLockCid
         buyOrder <- fetch buyOrderCid
         sellOrder <- fetch sellOrderCid
         buyLock <- fetch buyLockCid
         sellLock <- fetch sellLockCid
+        assertDarkOrderReference "Buy" operator pairId buyOrderId buyOrder
+        assertDarkOrderReference "Sell" operator pairId sellOrderId sellOrder
+        assertOrderLockReference "Buy" operator pairId buyLockId buyLock
+        assertOrderLockReference "Sell" operator pairId sellLockId sellLock
         archive buyOrderCid
         archive sellOrderCid
         archive buyLockCid
@@ -591,8 +614,12 @@ template MatchProposal
 
     choice Execute : DarkExecutionResult
       with
+        buyLockCid : ContractId OrderLock
+        buyOrderCid : ContractId DarkOrder
         executionId : Text
         instructionId : Text
+        sellLockCid : ContractId OrderLock
+        sellOrderCid : ContractId DarkOrder
         settlementAgent : Optional Party
       controller operator
       do
@@ -601,18 +628,14 @@ template MatchProposal
         assertNonEmpty "instructionId" instructionId
         assertMsg "Only accepted proposals may execute." (status == ProposalAccepted)
         assertMsg "Accepted proposals must execute before the lock window expires." (now < expiresAt)
-        maybeBuyOrderCid <- lookupByKey @DarkOrder (operator, pairId, buyOrderId)
-        buyOrderCid <- lookupOrFail "Buy dark order was not found." maybeBuyOrderCid
-        maybeSellOrderCid <- lookupByKey @DarkOrder (operator, pairId, sellOrderId)
-        sellOrderCid <- lookupOrFail "Sell dark order was not found." maybeSellOrderCid
-        maybeBuyLockCid <- lookupByKey @OrderLock (operator, pairId, buyLockId)
-        buyLockCid <- lookupOrFail "Buy order lock was not found." maybeBuyLockCid
-        maybeSellLockCid <- lookupByKey @OrderLock (operator, pairId, sellLockId)
-        sellLockCid <- lookupOrFail "Sell order lock was not found." maybeSellLockCid
         buyOrder <- fetch buyOrderCid
         sellOrder <- fetch sellOrderCid
         buyLock <- fetch buyLockCid
         sellLock <- fetch sellLockCid
+        assertDarkOrderReference "Buy" operator pairId buyOrderId buyOrder
+        assertDarkOrderReference "Sell" operator pairId sellOrderId sellOrder
+        assertOrderLockReference "Buy" operator pairId buyLockId buyLock
+        assertOrderLockReference "Sell" operator pairId sellLockId sellLock
         assertMsg "Accepted dark proposals require locked buy and sell orders." (buyOrder.status == DarkLocked && sellOrder.status == DarkLocked)
         assertMsg "Accepted dark proposals require active locks for both orders." (buyLock.status == LockActive && sellLock.status == LockActive)
         archive buyOrderCid
@@ -716,9 +739,6 @@ template ExecutionTicket
         && quantity > 0.0
         && price > 0.0
 
-    key (operator, pairId, executionId) : (Party, Text, Text)
-    maintainer key._1
-
 template SettlementInstruction
   with
     operator : Party
@@ -740,12 +760,10 @@ template SettlementInstruction
 
     ensure pairId /= "" && instructionId /= "" && executionId /= "" && matchProposalId /= ""
 
-    key (operator, pairId, instructionId) : (Party, Text, Text)
-    maintainer key._1
-
     choice MarkProgression : ContractId SettlementInstruction
       with
         actor : Party
+        delegateGrantCid : Optional (ContractId Phase2.AccessGrant)
         nextStatus : SettlementStatus
       controller actor
       do
@@ -756,9 +774,9 @@ template SettlementInstruction
           assertMsg
             "Only the named settlement delegate may progress settlement."
             (settlementAgent == Some actor)
-          maybeGrantCid <- lookupByKey @Phase2.AccessGrant (operator, pairId, actor, SettlementDelegateRole)
-          grantCid <- lookupOrFail "Settlement delegate access grant was not found." maybeGrantCid
+          grantCid <- lookupOrFail "Settlement delegate access grant was not found." delegateGrantCid
           grant <- fetch grantCid
+          assertGrantReference operator pairId actor SettlementDelegateRole grant
           assertProgressGrant grant
         assertMsg
           "The requested settlement transition is not allowed."

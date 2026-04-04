@@ -5,6 +5,7 @@ import {
 import {
   ContractValidationError,
   demoClockAdvanceRequestSchema,
+  generateMatchProposalRequestSchema,
   grantAccessRequestSchema,
   inviteDealersRequestSchema,
   markSettlementProgressionRequestSchema,
@@ -12,8 +13,10 @@ import {
   parseCreatePairRequest,
   parseDemoResetRequest,
   pausePairRequestSchema,
+  rejectMatchRequestSchema,
   rejectRfqRequestSchema,
   rejectAllQuotesRequestSchema,
+  submitDarkOrderRequestSchema,
   submitQuoteRequestSchema,
   withdrawQuoteRequestSchema,
   type DemoMode,
@@ -23,10 +26,13 @@ import {
 import {
   phase1DemoDefaults,
   phase2DemoDefaults,
+  phase3DemoDefaults,
   seedPhase1DemoEnvironment,
   seedPhase2DemoEnvironment,
+  seedPhase3DemoEnvironment,
   type Phase1DemoMode,
-  type Phase2DemoMode
+  type Phase2DemoMode,
+  type Phase3DemoMode
 } from "@canton-dark/sim-harness";
 
 type ApiRequest = {
@@ -47,6 +53,8 @@ type VenueApiAppOptions = {
   seed?: number;
   startAt?: Date | string;
 };
+
+type DemoMetadata = Omit<DemoStatusResponse, "currentTime" | "mode" | "seed">;
 
 export type VenueApiApp = {
   readonly demoPairId: string;
@@ -115,11 +123,40 @@ const isVenueApiAppOptions = (value: unknown): value is VenueApiAppOptions =>
   ("bootstrapMode" in value || "environment" in value || "seed" in value || "startAt" in value);
 
 const isPhase2DemoMode = (mode: DemoMode): mode is Phase2DemoMode => mode === "phase2-ready";
+const isPhase3DemoMode = (mode: DemoMode): mode is Phase3DemoMode => mode === "phase3-ready";
 
 const toBootstrapMode = (mode: DemoMode | undefined): DemoMode => mode ?? "phase1-ready";
 
-const resolveDemoDefaults = (mode: DemoMode) =>
-  isPhase2DemoMode(mode) ? phase2DemoDefaults : phase1DemoDefaults;
+const resolveDemoMetadata = (mode: DemoMode): DemoMetadata => {
+  if (isPhase3DemoMode(mode)) {
+    return {
+      dealerId: phase3DemoDefaults.dealerId,
+      dealerIds: phase3DemoDefaults.dealerIds,
+      operatorId: phase3DemoDefaults.operatorId,
+      pairId: phase3DemoDefaults.pairId,
+      secondarySubscriberId: phase3DemoDefaults.secondarySubscriberId,
+      subscriberId: phase3DemoDefaults.subscriberId
+    };
+  }
+
+  if (isPhase2DemoMode(mode)) {
+    return {
+      dealerId: phase2DemoDefaults.dealerId,
+      dealerIds: phase2DemoDefaults.dealerIds,
+      operatorId: phase2DemoDefaults.operatorId,
+      pairId: phase2DemoDefaults.pairId,
+      subscriberId: phase2DemoDefaults.subscriberId
+    };
+  }
+
+  return {
+    dealerId: phase1DemoDefaults.dealerId,
+    dealerIds: phase1DemoDefaults.dealerIds,
+    operatorId: phase1DemoDefaults.operatorId,
+    pairId: phase1DemoDefaults.pairId,
+    subscriberId: phase1DemoDefaults.subscriberId
+  };
+};
 
 const createEnvironment = (options: VenueApiAppOptions): MemoryVenueEnvironment =>
   createMemoryVenueEnvironment({
@@ -135,19 +172,16 @@ export const createVenueApiApp = async (
   const state = {
     environment: options.environment ?? createEnvironment(options),
     mode: toBootstrapMode(options.bootstrapMode),
+    metadata: resolveDemoMetadata(toBootstrapMode(options.bootstrapMode)),
     seed: options.seed ?? 424242,
     startAt: options.startAt
   };
 
   const buildDemoStatus = (): DemoStatusResponse => ({
     currentTime: state.environment.clock.now().toISOString(),
-    dealerId: resolveDemoDefaults(state.mode).dealerId,
-    dealerIds: resolveDemoDefaults(state.mode).dealerIds,
     mode: state.mode,
-    operatorId: resolveDemoDefaults(state.mode).operatorId,
-    pairId: resolveDemoDefaults(state.mode).pairId,
     seed: state.seed,
-    subscriberId: resolveDemoDefaults(state.mode).subscriberId
+    ...state.metadata
   });
 
   const resetDemoState = async (next: {
@@ -161,16 +195,49 @@ export const createVenueApiApp = async (
       ...(state.startAt !== undefined ? { startAt: state.startAt } : {})
     });
 
-    if (isPhase2DemoMode(state.mode)) {
-      await seedPhase2DemoEnvironment(state.environment, {
+    if (isPhase3DemoMode(state.mode)) {
+      const seeded = await seedPhase3DemoEnvironment(state.environment, {
         mode: state.mode,
         seed: state.seed
       });
+
+      state.metadata = {
+        buyOrderId: seeded.buyOrderId,
+        dealerId: seeded.dealerId,
+        dealerIds: seeded.dealerIds,
+        operatorId: seeded.operatorId,
+        pairId: seeded.pairId,
+        proposalId: seeded.proposalId,
+        secondarySubscriberId: seeded.secondarySubscriberId,
+        sellOrderId: seeded.sellOrderId,
+        subscriberId: seeded.subscriberId
+      };
+    } else if (isPhase2DemoMode(state.mode)) {
+      const seeded = await seedPhase2DemoEnvironment(state.environment, {
+        mode: state.mode,
+        seed: state.seed
+      });
+
+      state.metadata = {
+        dealerId: seeded.dealerId,
+        dealerIds: seeded.dealerIds,
+        operatorId: seeded.operatorId,
+        pairId: seeded.pairId,
+        subscriberId: seeded.subscriberId
+      };
     } else {
-      await seedPhase1DemoEnvironment(state.environment, {
+      const seeded = await seedPhase1DemoEnvironment(state.environment, {
         mode: state.mode as Phase1DemoMode,
         seed: state.seed
       });
+
+      state.metadata = {
+        dealerId: seeded.dealerId,
+        dealerIds: seeded.dealerIds,
+        operatorId: seeded.operatorId,
+        pairId: seeded.pairId,
+        subscriberId: seeded.subscriberId
+      };
     }
 
     return buildDemoStatus();
@@ -183,6 +250,7 @@ export const createVenueApiApp = async (
     });
   } else {
     state.mode = options.bootstrapMode ?? "empty";
+    state.metadata = resolveDemoMetadata(state.mode);
   }
 
   const handleRequest = async (request: ApiRequest): Promise<ApiReply> => {
@@ -269,6 +337,124 @@ export const createVenueApiApp = async (
             subjectId: body.subjectId,
             role: body.role,
             ...(body.entitlements !== undefined ? { entitlements: body.entitlements } : {})
+          })
+        );
+      }
+
+      if (request.method === "POST" && path[2] === "dark-orders" && path.length === 3) {
+        const body = parseBody(request.body, (value) => submitDarkOrderRequestSchema.parse(value));
+
+        return createReply(
+          201,
+          await state.environment.application.submitDarkOrder({
+            actorId: getActorId(request, url),
+            pairId,
+            clientOrderId: body.clientOrderId,
+            instrumentId: body.instrumentId,
+            side: body.side,
+            quantity: body.quantity,
+            limitPrice: body.limitPrice,
+            ...(body.expiresAt !== undefined ? { expiresAt: body.expiresAt } : {})
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "dark-orders" &&
+        path[3] !== undefined &&
+        path[4] === "cancel"
+      ) {
+        return createReply(
+          200,
+          await state.environment.application.cancelDarkOrder({
+            actorId: getActorId(request, url),
+            orderId: path[3],
+            pairId
+          })
+        );
+      }
+
+      if (request.method === "POST" && path[2] === "match-proposals" && path.length === 3) {
+        const body = parseBody(request.body, (value) =>
+          generateMatchProposalRequestSchema.parse(value)
+        );
+
+        return createReply(
+          201,
+          await state.environment.application.generateMatchProposal({
+            actorId: getActorId(request, url),
+            pairId,
+            ...(body.buyOrderId !== undefined ? { buyOrderId: body.buyOrderId } : {}),
+            ...(body.sellOrderId !== undefined ? { sellOrderId: body.sellOrderId } : {}),
+            ...(body.expiresAt !== undefined ? { expiresAt: body.expiresAt } : {})
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "match-proposals" &&
+        path[3] !== undefined &&
+        path[4] === "accept"
+      ) {
+        return createReply(
+          200,
+          await state.environment.application.acceptMatch({
+            actorId: getActorId(request, url),
+            pairId,
+            proposalId: path[3]
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "match-proposals" &&
+        path[3] !== undefined &&
+        path[4] === "reject"
+      ) {
+        const body = parseBody(request.body, (value) => rejectMatchRequestSchema.parse(value));
+
+        return createReply(
+          200,
+          await state.environment.application.rejectMatch({
+            actorId: getActorId(request, url),
+            pairId,
+            proposalId: path[3],
+            ...(body.reason !== undefined ? { reason: body.reason } : {})
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "match-proposals" &&
+        path[3] !== undefined &&
+        path[4] === "release-expired"
+      ) {
+        return createReply(
+          200,
+          await state.environment.application.releaseExpiredLock({
+            actorId: getActorId(request, url),
+            pairId,
+            proposalId: path[3]
+          })
+        );
+      }
+
+      if (
+        request.method === "POST" &&
+        path[2] === "match-proposals" &&
+        path[3] !== undefined &&
+        path[4] === "execute"
+      ) {
+        return createReply(
+          200,
+          await state.environment.application.executeSettlement({
+            actorId: getActorId(request, url),
+            pairId,
+            proposalId: path[3]
           })
         );
       }
@@ -539,6 +725,24 @@ export const createVenueApiApp = async (
         }
 
         const view = await state.environment.application.getSubscriberView(
+          pairId,
+          subscriberId,
+          getActorId(request, url)
+        );
+
+        return view === null
+          ? createReply(404, { message: `Pair ${pairId} was not found.` })
+          : createReply(200, view);
+      }
+
+      if (request.method === "GET" && path[2] === "views" && path[3] === "dark-subscriber") {
+        const subscriberId = url.searchParams.get("subscriberId");
+
+        if (subscriberId === null) {
+          throw new ContractValidationError("$.subscriberId", "is required");
+        }
+
+        const view = await state.environment.application.getDarkSubscriberState(
           pairId,
           subscriberId,
           getActorId(request, url)

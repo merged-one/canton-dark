@@ -448,6 +448,7 @@ describe("createVenueApplication", () => {
         {
           instructionId: accepted.settlementInstruction.instructionId,
           executionId: accepted.executionTicket.executionId,
+          pairId: "pair-demo",
           status: "affirmed",
           createdAt: "2026-04-02T00:00:06.000Z",
           updatedAt: "2026-04-02T00:00:08.000Z"
@@ -500,6 +501,7 @@ describe("createVenueApplication", () => {
         {
           instructionId: accepted.settlementInstruction.instructionId,
           executionId: accepted.executionTicket.executionId,
+          pairId: "pair-demo",
           status: "affirmed",
           createdAt: "2026-04-02T00:00:06.000Z",
           updatedAt: "2026-04-02T00:00:08.000Z"

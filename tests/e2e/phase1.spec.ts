@@ -9,7 +9,7 @@ import {
   urls
 } from "./helpers/phase1";
 
-test("@phase1 primary lifecycle across operator, subscriber, and dealer apps", async ({
+test("@phase1 @smoke primary lifecycle across operator, subscriber, and dealer apps", async ({
   browser,
   request
 }) => {
@@ -137,6 +137,7 @@ test("@phase1 late quote rejection blocks acceptance after expiry", async ({
     .locator("[data-testid='subscriber-rfq-form']")
     .getByRole("button", { name: "Open RFQ" })
     .click();
+  await expect(subscriberPage.getByTestId("subscriber-notice")).toContainText("Opened RFQ");
 
   await dealerPage.goto(`${urls.dealer}/?pairId=${pairId}`);
   await expect(dealerPage.getByTestId("dealer-invitation-detail")).toContainText("rfq-");

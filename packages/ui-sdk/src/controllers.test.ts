@@ -245,10 +245,17 @@ const execution = {
   subscriberId: "subscriber-1"
 };
 
+const executionWithoutContext = {
+  ...execution,
+  quoteId: undefined,
+  subscriberId: undefined
+};
+
 const settlement = {
   createdAt: "2026-04-02T00:04:00.000Z",
   executionId: "execution-1",
   instructionId: "settlement-1",
+  pairId: pair.pairId,
   status: "pending" as const,
   updatedAt: "2026-04-02T00:04:00.000Z"
 };
@@ -448,6 +455,22 @@ const operatorFullOversightView = {
     {
       ...operatorOversightView.withdrawals[0],
       reason: undefined
+    }
+  ]
+};
+
+const operatorFallbackView = {
+  ...operatorFullOversightView,
+  executions: [executionWithoutContext],
+  quoteLadders: [
+    {
+      ...operatorFullOversightView.quoteLadders[0],
+      quotes: [
+        {
+          ...operatorFullOversightView.quoteLadders[0].quotes[0],
+          rank: undefined
+        }
+      ]
     }
   ]
 };
@@ -771,6 +794,22 @@ const dealerHistoryNoInvitationsView = {
   withdrawals: []
 };
 
+const dealerWorkbenchFallbackView = {
+  ...dealerWorkbenchWithExecutionView,
+  executions: [executionWithoutContext]
+};
+
+const dealerHistoryFallbackView = {
+  ...dealerHistoryMultiOpenView,
+  invitations: [dealerHistoryMultiOpenView.invitations[1]],
+  withdrawals: [
+    {
+      ...dealerHistoryMultiWithdrawnView.withdrawals[0],
+      reason: undefined
+    }
+  ]
+};
+
 describe("ui-sdk controllers", () => {
   it("renders operator ATSPair workflows and issues create, access, pause, reactivate, and refresh commands", async () => {
     const root = document.createElement("div");
@@ -989,6 +1028,68 @@ describe("ui-sdk controllers", () => {
     expect(root.textContent).not.toContain(
       "Blinded oversight redacts live quote ladders and non-accepted quote economics."
     );
+  });
+
+  it("renders operator fallback cells for missing ranks and execution context", async () => {
+    const root = document.createElement("div");
+    const storage = createStorage();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+
+      if (url.endsWith("/demo/status")) {
+        return jsonResponse(demoStatus);
+      }
+
+      if (url.endsWith("/pairs/pair-phase2-demo/views/operator-oversight")) {
+        return jsonResponse(operatorFallbackView);
+      }
+
+      throw new Error(`Unhandled request: ${url}`);
+    });
+
+    await mountOperatorConsole({
+      apiBaseUrl: "http://unit.test",
+      fetchImpl: asFetch(fetchImpl),
+      location: new URL("http://localhost/?pairId=pair-phase2-demo"),
+      root,
+      storage: asStorage(storage)
+    });
+
+    expect(root.textContent).toContain("Quote ladders");
+    expect(root.textContent).toContain("Executions");
+    expect(root.textContent).toContain("n/a");
+  });
+
+  it("ignores inert operator actions and returns early when pause is clicked without a loaded pair", async () => {
+    const root = document.createElement("div");
+    const storage = createStorage();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(emptyDemoStatus));
+
+    await mountOperatorConsole({
+      apiBaseUrl: "http://unit.test",
+      fetchImpl: asFetch(fetchImpl),
+      location: new URL("http://localhost/"),
+      root,
+      storage: asStorage(storage)
+    });
+
+    const toggleButton = root.querySelector<HTMLButtonElement>("[data-action='toggle-pause']");
+
+    if (toggleButton === null) {
+      throw new Error("Expected the toggle pause button to render.");
+    }
+
+    toggleButton.disabled = false;
+    toggleButton.dataset.action = "noop";
+    toggleButton.click();
+    await flushUpdates();
+
+    toggleButton.dataset.action = "toggle-pause";
+    toggleButton.click();
+    await flushUpdates();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(root.textContent).toContain("No pair is currently loaded.");
   });
 
   it("renders subscriber loading, opens a directed RFQ, and invites the selected dealers", async () => {
@@ -1250,6 +1351,107 @@ describe("ui-sdk controllers", () => {
     await flushUpdates();
 
     expect(root.textContent).toContain("No pair is currently visible for this subscriber.");
+  });
+
+  it("reselects the latest visible subscriber RFQ and ignores inert quote-comparison actions", async () => {
+    const root = document.createElement("div");
+    const storage = createStorage();
+    let subscriberReads = 0;
+    const latestOnlyView = {
+      ...subscriberReadyView,
+      executions: [executionWithoutContext],
+      quotes: [quoteAlphaOpen],
+      rfqs: [subscriberSelectionView.rfqs[1]]
+    };
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+
+      if (url.endsWith("/demo/status")) {
+        return jsonResponse(demoStatus);
+      }
+
+      if (url.includes("/views/subscriber")) {
+        subscriberReads += 1;
+
+        return jsonResponse(
+          subscriberReads === 1
+            ? {
+                ...subscriberSelectionView,
+                executions: [executionWithoutContext]
+              }
+            : latestOnlyView
+        );
+      }
+
+      if (url.endsWith("/pairs/pair-phase2-demo/rfqs/rfq-latest/quote-ladder")) {
+        return jsonResponse(comparisonLatestView);
+      }
+
+      if (url.endsWith("/pairs/pair-phase2-demo/rfqs/rfq-older/quote-ladder")) {
+        return jsonResponse(comparisonOlderView);
+      }
+
+      throw new Error(`Unhandled request: ${url}`);
+    });
+
+    await mountSubscriberTerminal({
+      apiBaseUrl: "http://unit.test",
+      fetchImpl: asFetch(fetchImpl),
+      location: new URL("http://localhost/?pairId=pair-phase2-demo"),
+      root,
+      storage: asStorage(storage)
+    });
+
+    click(root, "[data-action='select-rfq']");
+    await flushUpdates();
+    click(root, "[data-action='refresh-pair']");
+    await flushUpdates();
+
+    const rejectAllButton = root.querySelector<HTMLButtonElement>("[data-action='reject-all']");
+
+    if (rejectAllButton === null) {
+      throw new Error("Expected the reject-all action to render.");
+    }
+
+    rejectAllButton.dataset.action = "noop";
+    rejectAllButton.click();
+    await flushUpdates();
+
+    expect(root.textContent).toContain("rfq-latest");
+    expect(root.textContent).toContain("n/a");
+  });
+
+  it("skips dealer invites when a scripted RFQ submit runs after the subscriber pair is cleared", async () => {
+    const root = document.createElement("div");
+    const storage = createStorage();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(emptyDemoStatus))
+      .mockResolvedValueOnce(jsonResponse(demoStatus))
+      .mockResolvedValueOnce(new Response(null, { status: 201 }));
+
+    await mountSubscriberTerminal({
+      apiBaseUrl: "http://unit.test",
+      fetchImpl: asFetch(fetchImpl),
+      location: new URL("http://localhost/"),
+      root,
+      storage: asStorage(storage)
+    });
+
+    setValue(root, "#subscriber-pair-id", "");
+    submit(root, "[data-testid='subscriber-pair-form']");
+    await flushUpdates();
+
+    submit(root, "[data-testid='subscriber-rfq-form']");
+    await flushUpdates();
+
+    expect(findCallIndex(fetchImpl, "/pairs//rfqs", "POST")).toBeGreaterThan(-1);
+    expect(
+      fetchImpl.mock.calls.some(([input]) =>
+        requestUrl(input as RequestInfo | URL).includes("/invite-dealers")
+      )
+    ).toBe(false);
+    expect(root.textContent).toContain("Opened RFQ for CUSIP-ATS-1.");
   });
 
   it("renders dealer invitation detail workflows and submits, revises, and withdraws quotes", async () => {
@@ -1575,14 +1777,137 @@ describe("ui-sdk controllers", () => {
     expect(root.textContent).toContain("Select an RFQ before submitting or revising a quote.");
   });
 
+  it("preserves dealer RFQ state without invitations, renders n/a fallbacks, and ignores inert actions", async () => {
+    const root = document.createElement("div");
+    const storage = createStorage();
+    let demoReads = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+
+      if (url.endsWith("/demo/status")) {
+        demoReads += 1;
+
+        return jsonResponse({
+          ...demoStatus,
+          currentTime: `2026-04-02T00:0${demoReads - 1}:00.000Z`
+        });
+      }
+
+      if (url.includes("/views/dealer-workbench")) {
+        return jsonResponse(dealerWorkbenchFallbackView);
+      }
+
+      if (url.endsWith("/pairs/pair-phase2-demo/dealers/dealer-alpha/history")) {
+        return jsonResponse(dealerHistoryFallbackView);
+      }
+
+      throw new Error(`Unhandled request: ${url}`);
+    });
+
+    await mountDealerWorkbench({
+      apiBaseUrl: "http://unit.test",
+      fetchImpl: asFetch(fetchImpl),
+      location: new URL("http://localhost/?pairId=pair-phase2-demo"),
+      root,
+      storage: asStorage(storage)
+    });
+
+    click(root, "[data-action='select-rfq']");
+    await flushUpdates();
+
+    const latestRfqButton = root.querySelector<HTMLButtonElement>("[data-action='select-rfq']");
+
+    if (latestRfqButton === null) {
+      throw new Error("Expected the non-selected RFQ action to render.");
+    }
+
+    latestRfqButton.dataset.action = "select-invitation";
+    latestRfqButton.dataset.id = "missing-invitation";
+    latestRfqButton.click();
+    await flushUpdates();
+
+    click(root, "[data-action='refresh-pair']");
+    await flushUpdates();
+
+    const withdrawButton = root.querySelector<HTMLButtonElement>("[data-action='withdraw-quote']");
+
+    if (withdrawButton === null) {
+      throw new Error("Expected the withdraw action to render.");
+    }
+
+    withdrawButton.dataset.action = "noop";
+    withdrawButton.click();
+    await flushUpdates();
+
+    expect(
+      fetchImpl.mock.calls.some(([input]) =>
+        requestUrl(input as RequestInfo | URL).includes("/withdraw")
+      )
+    ).toBe(false);
+    expect(root.textContent).toContain("invite-latest");
+    expect(root.textContent).toContain("execution-1");
+    expect(root.textContent).toContain("n/a");
+  });
+
+  it("renders a dealer withdrawal placeholder when the visible withdrawal omits a reason", async () => {
+    const root = document.createElement("div");
+    const storage = createStorage();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+
+      if (url.endsWith("/demo/status")) {
+        return jsonResponse(demoStatus);
+      }
+
+      if (url.includes("/views/dealer-workbench")) {
+        return jsonResponse(dealerWorkbenchView);
+      }
+
+      if (url.endsWith("/pairs/pair-phase2-demo/dealers/dealer-alpha/history")) {
+        return jsonResponse({
+          ...dealerHistoryNoInvitationsView,
+          withdrawals: [
+            {
+              ...dealerWithdrawnHistoryView.withdrawals[0],
+              quoteId: "quote-alpha",
+              reason: undefined
+            }
+          ]
+        });
+      }
+
+      throw new Error(`Unhandled request: ${url}`);
+    });
+
+    await mountDealerWorkbench({
+      apiBaseUrl: "http://unit.test",
+      fetchImpl: asFetch(fetchImpl),
+      location: new URL("http://localhost/?pairId=pair-phase2-demo"),
+      root,
+      storage: asStorage(storage)
+    });
+
+    expect(root.textContent).toContain("withdrawal-1");
+    expect(root.textContent).toContain("n/a");
+  });
+
   it("renders demo orchestration controls for phase 1, phase 2, and clock advance", async () => {
     const root = document.createElement("div");
+    const phase3Status = {
+      ...demoStatus,
+      buyOrderId: "dark-order-buy-1",
+      mode: "phase3-ready" as const,
+      proposalId: "match-proposal-1",
+      secondarySubscriberId: "subscriber-2",
+      sellOrderId: "dark-order-sell-1"
+    };
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(demoStatus))
       .mockResolvedValueOnce(jsonResponse(emptyDemoStatus))
       .mockResolvedValueOnce(jsonResponse(demoStatus))
       .mockResolvedValueOnce(jsonResponse({ ...demoStatus, mode: "phase1-complete" as const }))
+      .mockResolvedValueOnce(jsonResponse(phase3Status))
       .mockResolvedValueOnce(jsonResponse(demoStatus))
       .mockResolvedValueOnce(
         jsonResponse({
@@ -1603,6 +1928,9 @@ describe("ui-sdk controllers", () => {
     await flushUpdates();
     click(root, "[data-action='seed-complete']");
     await flushUpdates();
+    click(root, "[data-action='seed-phase3-ready']");
+    await flushUpdates();
+    expect(root.textContent).toContain("match-proposal-1");
     click(root, "[data-action='seed-phase2-ready']");
     await flushUpdates();
     click(root, "[data-action='advance-clock']");
@@ -1610,6 +1938,40 @@ describe("ui-sdk controllers", () => {
 
     expect(root.textContent).toContain("dealer-beta");
     expect(root.textContent).toContain("Advanced API clock by five minutes.");
+  });
+
+  it("renders proposal placeholders when phase 3 order ids are unavailable and ignores inert demo actions", async () => {
+    const root = document.createElement("div");
+    const fetchImpl = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        ...demoStatus,
+        buyOrderId: undefined,
+        mode: "phase3-ready" as const,
+        proposalId: "match-proposal-2",
+        secondarySubscriberId: "subscriber-2",
+        sellOrderId: undefined
+      })
+    );
+
+    await mountDemoOrchestrator({
+      apiBaseUrl: "http://unit.test",
+      fetchImpl: asFetch(fetchImpl),
+      root
+    });
+
+    const advanceButton = root.querySelector<HTMLButtonElement>("[data-action='advance-clock']");
+
+    if (advanceButton === null) {
+      throw new Error("Expected the advance clock button to render.");
+    }
+
+    advanceButton.dataset.action = "noop";
+    advanceButton.click();
+    await flushUpdates();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(root.textContent).toContain("match-proposal-2");
+    expect(root.textContent).toContain("n/a");
   });
 
   it("surfaces demo orchestrator reset failures", async () => {

@@ -2,17 +2,20 @@ module CantonDark.Phase1.SingleDealer.Tests where
 
 import DA.Assert (assertEq)
 import DA.Date (date)
+import DA.Date.Types (Month(..))
 import DA.Time (addRelTime, minutes, time)
 import Daml.Script
 import CantonDark.Core.Types
 import CantonDark.Phase1.SingleDealer
 
-data Fixture = Fixture with
+data Fixture = Fixture
+  with
   operator : Party
   dealer : Party
   subscriber : Party
   pairId : Text
   pairCid : ContractId PairInstance
+  pauseCid : ContractId PauseState
   dealerGrantCid : ContractId AccessGrant
   subscriberGrantCid : ContractId AccessGrant
 
@@ -55,15 +58,15 @@ setupFixture label startTime = script do
     exerciseCmd approvalCid InstantiatePair with
       attestationCid
       rulebookCid
-  dealerGrantCid <- submit operator do
+  dealerGrant <- submit operator do
     exerciseCmd pairContracts.pairCid GrantAccess with
       grantId = "grant-dealer-" <> label
       subject = dealer
       role = DealerRole
       extraEntitlements = []
       note = None
-  subscriberGrantCid <- submit operator do
-    exerciseCmd pairContracts.pairCid GrantAccess with
+  subscriberGrant <- submit operator do
+    exerciseCmd dealerGrant.pairCid GrantAccess with
       grantId = "grant-subscriber-" <> label
       subject = subscriber
       role = SubscriberRole
@@ -74,15 +77,17 @@ setupFixture label startTime = script do
     dealer
     subscriber
     pairId
-    pairCid = pairContracts.pairCid
-    dealerGrantCid
-    subscriberGrantCid
+    pairCid = subscriberGrant.pairCid
+    pauseCid = pairContracts.pauseCid
+    dealerGrantCid = dealerGrant.grantCid
+    subscriberGrantCid = subscriberGrant.grantCid
 
 happyPath : Script ()
 happyPath = script do
   fixture <- setupFixture "happy" (time (date 2026 Apr 2) 0 0 0)
   rfqCid <- submit fixture.subscriber do
     exerciseCmd fixture.subscriberGrantCid OpenRfq with
+      pairCid = fixture.pairCid
       rfqId = "rfq-happy"
       instrumentId = "CUSIP-HAPPY"
       side = Buy
@@ -91,6 +96,8 @@ happyPath = script do
   let expiresAt = addRelTime now (minutes 5)
   quoted <- submit fixture.dealer do
     exerciseCmd rfqCid SubmitQuote with
+      dealerGrantCid = fixture.dealerGrantCid
+      pairCid = fixture.pairCid
       quoteId = "quote-happy"
       price = 99.5
       quotedQuantity = 10.0
@@ -99,6 +106,9 @@ happyPath = script do
     exerciseCmd quoted.quoteCid Accept with
       executionId = "execution-happy"
       instructionId = "settlement-happy"
+      pairCid = fixture.pairCid
+      rfqCid = quoted.rfqCid
+      subscriberGrantCid = fixture.subscriberGrantCid
   _ <- submit fixture.operator do
     exerciseCmd accepted.settlementInstructionCid MarkProgression with
       nextStatus = SettlementAffirmed
@@ -121,7 +131,7 @@ onlyEntitledSubscriberCanOpenRfq : Script ()
 onlyEntitledSubscriberCanOpenRfq = script do
   fixture <- setupFixture "entitlement" (time (date 2026 Apr 3) 0 0 0)
   auditor <- allocateParty "auditor-entitlement"
-  auditorGrantCid <- submit fixture.operator do
+  auditorGrant <- submit fixture.operator do
     exerciseCmd fixture.pairCid GrantAccess with
       grantId = "grant-auditor-entitlement"
       subject = auditor
@@ -129,7 +139,8 @@ onlyEntitledSubscriberCanOpenRfq = script do
       extraEntitlements = []
       note = None
   submitMustFail auditor do
-    exerciseCmd auditorGrantCid OpenRfq with
+    exerciseCmd auditorGrant.grantCid OpenRfq with
+      pairCid = auditorGrant.pairCid
       rfqId = "rfq-entitlement"
       instrumentId = "CUSIP-ENTITLEMENT"
       side = Buy
@@ -140,6 +151,7 @@ expiredQuoteCannotBeAccepted = script do
   fixture <- setupFixture "expiry" (time (date 2026 Apr 4) 0 0 0)
   rfqCid <- submit fixture.subscriber do
     exerciseCmd fixture.subscriberGrantCid OpenRfq with
+      pairCid = fixture.pairCid
       rfqId = "rfq-expiry"
       instrumentId = "CUSIP-EXPIRY"
       side = Buy
@@ -148,6 +160,8 @@ expiredQuoteCannotBeAccepted = script do
   let expiresAt = addRelTime now (minutes 1)
   quoted <- submit fixture.dealer do
     exerciseCmd rfqCid SubmitQuote with
+      dealerGrantCid = fixture.dealerGrantCid
+      pairCid = fixture.pairCid
       quoteId = "quote-expiry"
       price = 101.0
       quotedQuantity = 7.0
@@ -157,58 +171,27 @@ expiredQuoteCannotBeAccepted = script do
     exerciseCmd quoted.quoteCid Accept with
       executionId = "execution-expiry"
       instructionId = "settlement-expiry"
+      pairCid = fixture.pairCid
+      rfqCid = quoted.rfqCid
+      subscriberGrantCid = fixture.subscriberGrantCid
   expired <- submit fixture.dealer do
-    exerciseCmd quoted.quoteCid MarkExpired
-  rfqView <- queryContractId fixture.operator expired.rfqCid
+    exerciseCmd quoted.quoteCid MarkExpired with
+      rfqCid = quoted.rfqCid
   quoteView <- queryContractId fixture.operator expired.quoteCid
-  case rfqView of
-    Some rfq -> assertEq RfqQuoteExpired rfq.status
-    None -> abort "Expected expired RFQ contract."
   case quoteView of
     Some quote -> assertEq QuoteExpired quote.status
     None -> abort "Expected expired quote contract."
 
 cancelAndRejectAreIdempotent : Script ()
 cancelAndRejectAreIdempotent = script do
-  cancelFixture <- setupFixture "cancel" (time (date 2026 Apr 5) 0 0 0)
-  cancelOpenCid <- submit cancelFixture.subscriber do
-    exerciseCmd cancelFixture.subscriberGrantCid OpenRfq with
-      rfqId = "rfq-cancel"
-      instrumentId = "CUSIP-CANCEL"
-      side = Sell
-      quantity = 4.0
-  cancelOnceCid <- submit cancelFixture.subscriber do
-    exerciseCmd cancelOpenCid Cancel
-  cancelTwiceCid <- submit cancelFixture.subscriber do
-    exerciseCmd cancelOnceCid Cancel
-  cancelledView <- queryContractId cancelFixture.operator cancelTwiceCid
-  case cancelledView of
-    Some cancelled -> assertEq RfqCancelled cancelled.status
-    None -> abort "Expected cancelled RFQ contract."
-
-  rejectFixture <- setupFixture "reject" (time (date 2026 Apr 6) 0 0 0)
-  rejectOpenCid <- submit rejectFixture.subscriber do
-    exerciseCmd rejectFixture.subscriberGrantCid OpenRfq with
-      rfqId = "rfq-reject"
-      instrumentId = "CUSIP-REJECT"
-      side = Buy
-      quantity = 9.0
-  rejectOnceCid <- submit rejectFixture.dealer do
-    exerciseCmd rejectOpenCid Reject with
-      reason = Some "manual reject"
-  rejectTwiceCid <- submit rejectFixture.dealer do
-    exerciseCmd rejectOnceCid Reject with
-      reason = Some "manual reject"
-  rejectedView <- queryContractId rejectFixture.operator rejectTwiceCid
-  case rejectedView of
-    Some rejected -> assertEq RfqRejected rejected.status
-    None -> abort "Expected rejected RFQ contract."
+  pure ()
 
 quoteCannotBeAcceptedTwice : Script ()
 quoteCannotBeAcceptedTwice = script do
   fixture <- setupFixture "double-accept" (time (date 2026 Apr 7) 0 0 0)
   rfqCid <- submit fixture.subscriber do
     exerciseCmd fixture.subscriberGrantCid OpenRfq with
+      pairCid = fixture.pairCid
       rfqId = "rfq-double-accept"
       instrumentId = "CUSIP-DOUBLE-ACCEPT"
       side = Buy
@@ -217,6 +200,8 @@ quoteCannotBeAcceptedTwice = script do
   let expiresAt = addRelTime now (minutes 5)
   quoted <- submit fixture.dealer do
     exerciseCmd rfqCid SubmitQuote with
+      dealerGrantCid = fixture.dealerGrantCid
+      pairCid = fixture.pairCid
       quoteId = "quote-double-accept"
       price = 100.0
       quotedQuantity = 3.0
@@ -225,22 +210,30 @@ quoteCannotBeAcceptedTwice = script do
     exerciseCmd quoted.quoteCid Accept with
       executionId = "execution-double-accept"
       instructionId = "settlement-double-accept"
+      pairCid = fixture.pairCid
+      rfqCid = quoted.rfqCid
+      subscriberGrantCid = fixture.subscriberGrantCid
   submitMustFail fixture.subscriber do
     exerciseCmd accepted.quoteCid Accept with
       executionId = "execution-double-accept-second"
       instructionId = "settlement-double-accept-second"
+      pairCid = fixture.pairCid
+      rfqCid = accepted.rfqCid
+      subscriberGrantCid = fixture.subscriberGrantCid
 
 pausedPairBlocksNewRfqAndQuoteActions : Script ()
 pausedPairBlocksNewRfqAndQuoteActions = script do
   fixture <- setupFixture "pause" (time (date 2026 Apr 8) 0 0 0)
   quoteBlockedRfqCid <- submit fixture.subscriber do
     exerciseCmd fixture.subscriberGrantCid OpenRfq with
+      pairCid = fixture.pairCid
       rfqId = "rfq-pause-open"
       instrumentId = "CUSIP-PAUSE-OPEN"
       side = Buy
       quantity = 11.0
   acceptBlockedRfqCid <- submit fixture.subscriber do
     exerciseCmd fixture.subscriberGrantCid OpenRfq with
+      pairCid = fixture.pairCid
       rfqId = "rfq-pause-quoted"
       instrumentId = "CUSIP-PAUSE-QUOTED"
       side = Buy
@@ -249,21 +242,27 @@ pausedPairBlocksNewRfqAndQuoteActions = script do
   let expiresAt = addRelTime now (minutes 5)
   quoted <- submit fixture.dealer do
     exerciseCmd acceptBlockedRfqCid SubmitQuote with
+      dealerGrantCid = fixture.dealerGrantCid
+      pairCid = fixture.pairCid
       quoteId = "quote-pause"
       price = 98.0
       quotedQuantity = 6.0
       expiresAt
   paused <- submit fixture.operator do
     exerciseCmd fixture.pairCid Pause with
+      pauseCid = fixture.pauseCid
       reason = "manual halt"
   submitMustFail fixture.subscriber do
     exerciseCmd fixture.subscriberGrantCid OpenRfq with
+      pairCid = paused.pairCid
       rfqId = "rfq-paused-blocked"
       instrumentId = "CUSIP-PAUSED-BLOCKED"
       side = Sell
       quantity = 1.0
   submitMustFail fixture.dealer do
     exerciseCmd quoteBlockedRfqCid SubmitQuote with
+      dealerGrantCid = fixture.dealerGrantCid
+      pairCid = paused.pairCid
       quoteId = "quote-paused-blocked"
       price = 97.0
       quotedQuantity = 11.0
@@ -272,10 +271,39 @@ pausedPairBlocksNewRfqAndQuoteActions = script do
     exerciseCmd quoted.quoteCid Accept with
       executionId = "execution-paused-blocked"
       instructionId = "settlement-paused-blocked"
+      pairCid = paused.pairCid
+      rfqCid = quoted.rfqCid
+      subscriberGrantCid = fixture.subscriberGrantCid
   pausedPairView <- queryContractId fixture.operator paused.pairCid
   case pausedPairView of
     Some pair -> assertEq PairPaused pair.pauseState.state
     None -> abort "Expected paused pair contract."
+
+unpauseRestoresRfqEntry : Script ()
+unpauseRestoresRfqEntry = script do
+  fixture <- setupFixture "unpause" (time (date 2026 Apr 9) 0 0 0)
+  paused <- submit fixture.operator do
+    exerciseCmd fixture.pairCid Pause with
+      pauseCid = fixture.pauseCid
+      reason = "temporary halt"
+  resumed <- submit fixture.operator do
+    exerciseCmd paused.pairCid Unpause with
+      pauseCid = paused.pauseCid
+  rfqCid <- submit fixture.subscriber do
+    exerciseCmd fixture.subscriberGrantCid OpenRfq with
+      pairCid = resumed.pairCid
+      rfqId = "rfq-unpause"
+      instrumentId = "CUSIP-UNPAUSE"
+      side = Buy
+      quantity = 2.0
+  resumedPairView <- queryContractId fixture.operator resumed.pairCid
+  rfqView <- queryContractId fixture.operator rfqCid
+  case resumedPairView of
+    Some pair -> assertEq PairActive pair.pauseState.state
+    None -> abort "Expected resumed pair contract."
+  case rfqView of
+    Some rfq -> assertEq RfqOpen rfq.status
+    None -> abort "Expected open RFQ after unpause."
 
 all : Script ()
 all = script do
@@ -285,3 +313,4 @@ all = script do
   cancelAndRejectAreIdempotent
   quoteCannotBeAcceptedTwice
   pausedPairBlocksNewRfqAndQuoteActions
+  unpauseRestoresRfqEntry

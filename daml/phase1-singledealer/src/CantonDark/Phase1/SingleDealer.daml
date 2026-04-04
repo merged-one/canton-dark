@@ -3,21 +3,29 @@ module CantonDark.Phase1.SingleDealer where
 import DA.Assert (assertMsg)
 import CantonDark.Core.Types
 
-data PairContracts = PairContracts with
+data PairContracts = PairContracts
+  with
   pairCid : ContractId PairInstance
   pauseCid : ContractId PauseState
 
-data QuoteSubmission = QuoteSubmission with
+data PairGrantResult = PairGrantResult
+  with
+  grantCid : ContractId AccessGrant
+  pairCid : ContractId PairInstance
+
+data QuoteSubmission = QuoteSubmission
+  with
   rfqCid : ContractId RFQSession
   quoteCid : ContractId DealerQuote
 
-data QuoteAcceptance = QuoteAcceptance with
+data QuoteAcceptance = QuoteAcceptance
+  with
   rfqCid : ContractId RFQSession
   quoteCid : ContractId DealerQuote
   executionTicketCid : ContractId ExecutionTicket
   settlementInstructionCid : ContractId SettlementInstruction
 
-archiveIfSome : Optional (ContractId t) -> Update ()
+archiveIfSome : HasArchive t => Optional (ContractId t) -> Update ()
 archiveIfSome maybeCid =
   case maybeCid of
     None -> pure ()
@@ -108,9 +116,6 @@ template OperatorApproval
 
     ensure pairId /= ""
 
-    key (operator, pairId) : (Party, Text)
-    maintainer key._1
-
     choice InstantiatePair : PairContracts
       with
         attestationCid : ContractId RegulatoryAttestation
@@ -144,6 +149,7 @@ template OperatorApproval
           pairId
           operator
           dealer
+          participants = []
           mode = SingleDealerPair
           operatorApproval = toApprovalData this
           regulatoryAttestation = toAttestationData attestation
@@ -168,9 +174,6 @@ template RegulatoryAttestation
 
     ensure pairId /= "" && jurisdiction /= ""
 
-    key (operator, pairId) : (Party, Text)
-    maintainer key._1
-
 template RulebookRelease
   with
     pairId : Text
@@ -186,9 +189,6 @@ template RulebookRelease
     observer dealer
 
     ensure pairId /= "" && releaseId /= "" && summary /= "" && version /= ""
-
-    key (operator, pairId, version) : (Party, Text, Text)
-    maintainer key._1
 
 template PauseState
   with
@@ -213,14 +213,12 @@ template PauseState
             None -> False
             Some pauseReason -> pauseReason /= ""
 
-    key (operator, pairId) : (Party, Text)
-    maintainer key._1
-
 template PairInstance
   with
     pairId : Text
     operator : Party
     dealer : Party
+    participants : [Party]
     mode : PairMode
     operatorApproval : OperatorApprovalData
     regulatoryAttestation : RegulatoryAttestationData
@@ -230,7 +228,7 @@ template PairInstance
     updatedAt : Time
   where
     signatory operator
-    observer dealer
+    observer dealer, participants
 
     ensure
       pairId /= ""
@@ -238,10 +236,7 @@ template PairInstance
         && operatorApproval.status == ApprovalApproved
         && regulatoryAttestation.status == AttestationAttested
 
-    key (operator, pairId) : (Party, Text)
-    maintainer key._1
-
-    choice GrantAccess : ContractId AccessGrant
+    choice GrantAccess : PairGrantResult
       with
         grantId : Text
         subject : Party
@@ -256,7 +251,7 @@ template PairInstance
         assertMsg
           "SingleDealerPair venues must bind exactly one dealer."
           (role /= DealerRole || subject == dealer)
-        create AccessGrant with
+        grantCid <- create AccessGrant with
           grantId
           pairId
           operator
@@ -268,16 +263,23 @@ template PairInstance
           note
           revokedAt = None
           revokedBy = None
+        pairCid <- create this with
+          participants =
+            if role == DealerRole then
+              participants
+            else
+              uniqueSorted (subject :: participants)
+        pure PairGrantResult with grantCid; pairCid
 
     choice Pause : PairContracts
       with
+        pauseCid : ContractId PauseState
         reason : Text
       controller operator
       do
         now <- getTime
         assertNonEmpty "reason" reason
-        previousPauseCid <- lookupByKey @PauseState (operator, pairId)
-        archiveIfSome previousPauseCid
+        archive pauseCid
         pauseCid <- create PauseState with
           pairId
           operator
@@ -292,11 +294,12 @@ template PairInstance
         pure PairContracts with pairCid; pauseCid
 
     choice Unpause : PairContracts
+      with
+        pauseCid : ContractId PauseState
       controller operator
       do
         now <- getTime
-        previousPauseCid <- lookupByKey @PauseState (operator, pairId)
-        archiveIfSome previousPauseCid
+        archive pauseCid
         pauseCid <- create PauseState with
           pairId
           operator
@@ -329,19 +332,15 @@ template AccessGrant
 
     ensure grantId /= "" && pairId /= ""
 
-    key (operator, pairId, subject, role) : (Party, Text, Party, ParticipantRole)
-    maintainer key._1
-
-    choice OpenRfq : ContractId RFQSession
+    nonconsuming choice OpenRfq : ContractId RFQSession
       with
+        pairCid : ContractId PairInstance
         rfqId : Text
         instrumentId : Text
         side : RFQSide
         quantity : Decimal
       controller subject
       do
-        maybePairCid <- lookupByKey @PairInstance (operator, pairId)
-        pairCid <- lookupOrFail "Pair was not found." maybePairCid
         pair <- fetch pairCid
         now <- getTime
         assertSubscriberGrant this
@@ -388,27 +387,22 @@ template RFQSession
     rejectedBy : Optional Party
     rejectionReason : Optional Text
   where
-    signatory operator, subscriber
-    observer dealer
+    signatory operator
+    observer dealer, subscriber
 
     ensure pairId /= "" && rfqId /= "" && instrumentId /= "" && quantity > 0.0
 
-    key (operator, pairId, rfqId) : (Party, Text, Text)
-    maintainer key._1
-
     choice SubmitQuote : QuoteSubmission
       with
+        dealerGrantCid : ContractId AccessGrant
+        pairCid : ContractId PairInstance
         quoteId : Text
         price : Decimal
         quotedQuantity : Decimal
         expiresAt : Time
       controller dealer
       do
-        maybePairCid <- lookupByKey @PairInstance (operator, pairId)
-        pairCid <- lookupOrFail "Pair was not found." maybePairCid
         pair <- fetch pairCid
-        maybeDealerGrantCid <- lookupByKey @AccessGrant (operator, pairId, dealer, DealerRole)
-        dealerGrantCid <- lookupOrFail "Dealer access grant was not found." maybeDealerGrantCid
         dealerGrant <- fetch dealerGrantCid
         now <- getTime
         assertPairActive pair
@@ -446,7 +440,7 @@ template RFQSession
         pure QuoteSubmission with rfqCid; quoteCid
 
     choice Cancel : ContractId RFQSession
-      controller subscriber
+      controller dealer, subscriber
       do
         now <- getTime
         let nextRfq =
@@ -504,16 +498,12 @@ template DealerQuote
 
     ensure pairId /= "" && rfqId /= "" && quoteId /= "" && price > 0.0 && quantity > 0.0 && expiresAt > createdAt
 
-    key (operator, pairId, quoteId) : (Party, Text, Text)
-    maintainer key._1
-
     choice MarkExpired : QuoteSubmission
+      with
+        rfqCid : ContractId RFQSession
       controller dealer
       do
         now <- getTime
-        maybeRfqCid <- lookupByKey @RFQSession (operator, pairId, rfqId)
-        rfqCid <- lookupOrFail "RFQ was not found." maybeRfqCid
-        rfq <- fetch rfqCid
         assertMsg "Quotes expire only at or after their expiry timestamp." (now >= expiresAt)
         assertMsg "Only open dealer quotes may expire." (status == QuoteOpen || status == QuoteExpired)
         let nextQuote =
@@ -523,31 +513,20 @@ template DealerQuote
                 this with
                   updatedAt = now
                   status = QuoteExpired
-        let nextRfq =
-              if rfq.status == RfqQuoteExpired then
-                rfq
-              else
-                rfq with
-                  updatedAt = now
-                  status = RfqQuoteExpired
-        nextRfqCid <- create nextRfq
         nextQuoteCid <- create nextQuote
-        pure QuoteSubmission with rfqCid = nextRfqCid; quoteCid = nextQuoteCid
+        pure QuoteSubmission with rfqCid; quoteCid = nextQuoteCid
 
     choice Accept : QuoteAcceptance
       with
         executionId : Text
         instructionId : Text
+        pairCid : ContractId PairInstance
+        rfqCid : ContractId RFQSession
+        subscriberGrantCid : ContractId AccessGrant
       controller subscriber
       do
-        maybePairCid <- lookupByKey @PairInstance (operator, pairId)
-        pairCid <- lookupOrFail "Pair was not found." maybePairCid
         pair <- fetch pairCid
-        maybeSubscriberGrantCid <- lookupByKey @AccessGrant (operator, pairId, subscriber, SubscriberRole)
-        subscriberGrantCid <- lookupOrFail "Subscriber access grant was not found." maybeSubscriberGrantCid
         subscriberGrant <- fetch subscriberGrantCid
-        maybeRfqCid <- lookupByKey @RFQSession (operator, pairId, rfqId)
-        rfqCid <- lookupOrFail "RFQ was not found." maybeRfqCid
         rfq <- fetch rfqCid
         now <- getTime
         assertPairActive pair
@@ -558,6 +537,7 @@ template DealerQuote
         assertMsg "Only open dealer quotes may be accepted." (status == QuoteOpen)
         assertMsg "Only quoted RFQs may accept a dealer quote." (rfq.status == RfqQuoted)
         assertMsg "Dealer quotes must be accepted before expiry." (now < expiresAt)
+        archive rfqCid
         let acceptedRfq =
               rfq with
                 updatedAt = now
@@ -620,9 +600,6 @@ template ExecutionTicket
 
     ensure pairId /= "" && executionId /= "" && instrumentId /= "" && quantity > 0.0 && price > 0.0
 
-    key (operator, pairId, executionId) : (Party, Text, Text)
-    maintainer key._1
-
 template SettlementInstruction
   with
     operator : Party
@@ -639,9 +616,6 @@ template SettlementInstruction
     observer dealer, subscriber
 
     ensure pairId /= "" && instructionId /= "" && executionId /= ""
-
-    key (operator, pairId, instructionId) : (Party, Text, Text)
-    maintainer key._1
 
     choice MarkProgression : ContractId SettlementInstruction
       with

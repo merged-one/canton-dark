@@ -15,6 +15,7 @@ import { resolveApiBaseUrl, toErrorMessage, type AppBootOptions } from "./shared
 type NoticeTone = "accent" | "alert" | "ok" | "warn";
 
 type DemoState = {
+  buyOrderId: string | undefined;
   currentTime: string;
   dealerId: string;
   dealerIds: readonly string[];
@@ -23,10 +24,13 @@ type DemoState = {
     text: string;
     tone: NoticeTone;
   };
-  mode: "empty" | "phase1-complete" | "phase1-ready" | "phase2-ready";
+  mode: "empty" | "phase1-complete" | "phase1-ready" | "phase2-ready" | "phase3-ready";
   operatorId: string;
   pairId: string;
+  proposalId: string | undefined;
+  secondarySubscriberId: string | undefined;
   seed: number;
+  sellOrderId: string | undefined;
   subscriberId: string;
 };
 
@@ -54,6 +58,7 @@ const renderDemoContent = (state: DemoState): string => {
         <button class="button button-primary" type="button" data-action="seed-ready">Seed ready pair</button>
         <button class="button" type="button" data-action="seed-complete">Seed completed flow</button>
         <button class="button button-primary" type="button" data-action="seed-phase2-ready">Seed Phase 2 ATSPair</button>
+        <button class="button button-primary" type="button" data-action="seed-phase3-ready">Seed Phase 3 dark cross</button>
       </div>
       <div class="actions">
         <button class="button" type="button" data-action="advance-clock">Advance API clock +5m</button>
@@ -70,7 +75,14 @@ const renderDemoContent = (state: DemoState): string => {
         { key: "Mode", value: state.mode },
         { key: "Seed", value: String(state.seed) },
         { key: "Pair", value: state.pairId },
-        { key: "API clock", value: state.currentTime }
+        { key: "API clock", value: state.currentTime },
+        ...(state.proposalId === undefined
+          ? []
+          : [
+              { key: "Proposal", value: state.proposalId },
+              { key: "Buy order", value: state.buyOrderId ?? "n/a" },
+              { key: "Sell order", value: state.sellOrderId ?? "n/a" }
+            ])
       ])}
       ${renderLaunchLinks(state)}
     `,
@@ -85,6 +97,9 @@ const renderDemoContent = (state: DemoState): string => {
       ${renderKeyValueGrid([
         { key: "Operator", value: state.operatorId },
         { key: "Subscriber", value: state.subscriberId },
+        ...(state.secondarySubscriberId === undefined
+          ? []
+          : [{ key: "Counterparty subscriber", value: state.secondarySubscriberId }]),
         { key: "Primary dealer", value: state.dealerId },
         { key: "Dealer roster", value: state.dealerIds.join(", ") }
       ])}
@@ -136,6 +151,7 @@ export const mountDemoOrchestrator = async ({
   });
   const status = await client.getDemoStatus();
   const state: DemoState = {
+    buyOrderId: status.buyOrderId,
     currentTime: status.currentTime,
     dealerId: status.dealerId,
     dealerIds: status.dealerIds,
@@ -143,18 +159,25 @@ export const mountDemoOrchestrator = async ({
     mode: status.mode,
     operatorId: status.operatorId,
     pairId: status.pairId,
+    proposalId: status.proposalId,
+    secondarySubscriberId: status.secondarySubscriberId,
     seed: status.seed,
+    sellOrderId: status.sellOrderId,
     subscriberId: status.subscriberId
   };
 
   const assign = (next: typeof status): void => {
+    state.buyOrderId = next.buyOrderId;
     state.currentTime = next.currentTime;
     state.dealerId = next.dealerId;
     state.dealerIds = next.dealerIds;
     state.mode = next.mode;
     state.operatorId = next.operatorId;
     state.pairId = next.pairId;
+    state.proposalId = next.proposalId;
+    state.secondarySubscriberId = next.secondarySubscriberId;
     state.seed = next.seed;
+    state.sellOrderId = next.sellOrderId;
     state.subscriberId = next.subscriberId;
   };
 
@@ -203,6 +226,15 @@ export const mountDemoOrchestrator = async ({
           void runWithFeedback(
             () => client.resetDemoState({ mode: "phase2-ready" }),
             "Seeded Phase 2 ATSPair.",
+            "ok"
+          );
+          return;
+        }
+
+        if (action === "seed-phase3-ready") {
+          void runWithFeedback(
+            () => client.resetDemoState({ mode: "phase3-ready" }),
+            "Seeded Phase 3 dark-cross pair.",
             "ok"
           );
           return;

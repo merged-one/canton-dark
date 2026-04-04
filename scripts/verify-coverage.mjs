@@ -3,15 +3,19 @@ import path from "node:path";
 
 const rootDir = process.cwd();
 const packageRoots = [path.join(rootDir, "apps"), path.join(rootDir, "packages")];
-const excludedFileMatchers = [
-  /\.d\.ts$/,
-  /\/generated\//,
-  /\/types?\.(?:ts|tsx|mts|cts)$/,
-  /\.wiring\.ts$/
-];
+const allowlistPath = path.join(rootDir, "coverage.allowlist.json");
 const threshold = 98;
 
-const shouldExclude = (filePath) => excludedFileMatchers.some((matcher) => matcher.test(filePath));
+const allowlist = JSON.parse(readFileSync(allowlistPath, "utf8"));
+const excludedFiles = new Set(
+  (allowlist.aggregateExclusions ?? []).map((relativePath) =>
+    path.normalize(path.join(rootDir, relativePath))
+  )
+);
+
+const shouldExclude = (filePath) => excludedFiles.has(path.normalize(filePath));
+
+const formatMetric = (covered, total) => Number(((covered / total) * 100).toFixed(2));
 
 const findCoverageSummaries = (dirPath) => {
   if (!statSync(dirPath, { throwIfNoEntry: false })?.isDirectory()) {
@@ -52,10 +56,23 @@ const aggregate = {
   statements: { covered: 0, total: 0 },
   branches: { covered: 0, total: 0 }
 };
+const packageMetrics = [];
 const seenFiles = new Set();
 
 for (const summaryPath of summaries) {
   const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
+  const packageRoot = path.dirname(path.dirname(path.dirname(summaryPath)));
+  const packageName = path.relative(rootDir, packageRoot);
+
+  if (summary.total !== undefined) {
+    packageMetrics.push({
+      name: packageName,
+      branches: formatMetric(summary.total.branches.covered, summary.total.branches.total),
+      functions: formatMetric(summary.total.functions.covered, summary.total.functions.total),
+      lines: formatMetric(summary.total.lines.covered, summary.total.lines.total),
+      statements: formatMetric(summary.total.statements.covered, summary.total.statements.total)
+    });
+  }
 
   for (const [filePath, metrics] of Object.entries(summary)) {
     if (filePath === "total" || seenFiles.has(filePath) || shouldExclude(filePath)) {
@@ -71,8 +88,6 @@ for (const summaryPath of summaries) {
   }
 }
 
-const formatMetric = (covered, total) => Number(((covered / total) * 100).toFixed(2));
-
 const results = Object.fromEntries(
   Object.entries(aggregate).map(([key, metric]) => [
     key,
@@ -85,6 +100,20 @@ for (const [metric, percentage] of Object.entries(results)) {
     throw new Error(
       `Repo-wide ${metric} coverage ${percentage}% is below the ${threshold}% target.`
     );
+  }
+}
+
+console.log("Package unit coverage");
+for (const metrics of packageMetrics.sort((left, right) => left.name.localeCompare(right.name))) {
+  console.log(
+    `- ${metrics.name}: lines ${metrics.lines}% | branches ${metrics.branches}% | functions ${metrics.functions}% | statements ${metrics.statements}%`
+  );
+}
+
+if (excludedFiles.size > 0) {
+  console.log("Aggregate exclusions");
+  for (const excludedFile of [...excludedFiles].sort()) {
+    console.log(`- ${path.relative(rootDir, excludedFile)}`);
   }
 }
 

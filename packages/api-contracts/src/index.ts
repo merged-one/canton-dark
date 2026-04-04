@@ -8,7 +8,14 @@ import type {
   SubscriberView,
   VenueHealthReadModel
 } from "@canton-dark/query-models";
-import type { Entitlement } from "@canton-dark/domain-core";
+import type {
+  DarkOrder,
+  Entitlement,
+  ExecutionTicket,
+  MatchProposal,
+  OrderLock,
+  SettlementInstruction
+} from "@canton-dark/domain-core";
 
 export type CreatePairRequest = {
   dealerId?: string;
@@ -67,13 +74,46 @@ export type MarkSettlementProgressionRequest = {
   status: "affirmed" | "failed" | "instructed" | "pending" | "settled";
 };
 
+export type SubmitDarkOrderRequest = {
+  clientOrderId: string;
+  expiresAt?: string;
+  instrumentId: string;
+  limitPrice: number;
+  quantity: number;
+  side: "buy" | "sell";
+};
+
+export type GenerateMatchProposalRequest = {
+  buyOrderId?: string;
+  expiresAt?: string;
+  sellOrderId?: string;
+};
+
+export type RejectMatchRequest = {
+  reason?: string;
+};
+
+export type DarkSubscriberStateResponse = {
+  executions: readonly ExecutionTicket[];
+  locks: readonly OrderLock[];
+  orders: readonly DarkOrder[];
+  proposals: readonly MatchProposal[];
+  settlements: readonly SettlementInstruction[];
+  subscriberId: string;
+};
+
 export type HealthResponse = {
   generatedAt: string;
   service: "venue-api";
   venue: VenueHealthReadModel;
 };
 
-export type DemoMode = "empty" | "phase1-complete" | "phase1-ready" | "phase2-ready";
+export type DemoMode =
+  | "empty"
+  | "phase1-complete"
+  | "phase1-ready"
+  | "phase2-ready"
+  | "phase3-ready";
 
 export type DemoResetRequest = {
   mode: DemoMode;
@@ -85,13 +125,17 @@ export type DemoClockAdvanceRequest = {
 };
 
 export type DemoStatusResponse = {
+  buyOrderId?: string;
   currentTime: string;
   dealerId: string;
   dealerIds: readonly string[];
   mode: DemoMode;
   operatorId: string;
   pairId: string;
+  proposalId?: string;
+  secondarySubscriberId?: string;
   seed: number;
+  sellOrderId?: string;
   subscriberId: string;
 };
 
@@ -294,25 +338,103 @@ const quoteViewSchema = objectSchema<OperatorView["quotes"][number]>({
   createdAt: stringSchema()
 });
 
-const executionViewSchema = objectSchema<OperatorView["executions"][number]>({
+const executionViewSchema = objectSchema<ExecutionTicket>({
+  acceptedAt: stringSchema(),
+  buyOrderId: optionalSchema(stringSchema()),
+  buySubscriberId: optionalSchema(stringSchema()),
+  dealerId: optionalSchema(stringSchema()),
   executionId: stringSchema(),
-  pairId: stringSchema(),
-  rfqId: stringSchema(),
-  quoteId: stringSchema(),
-  dealerId: stringSchema(),
-  subscriberId: stringSchema(),
+  executionKind: optionalSchema(enumSchema(["dark_cross", "rfq_quote"])),
   instrumentId: stringSchema(),
-  side: enumSchema(["buy", "sell"]),
+  matchProposalId: optionalSchema(stringSchema()),
+  pairId: stringSchema(),
   quantity: numberSchema(),
   price: numberSchema(),
-  acceptedAt: stringSchema()
+  quoteId: optionalSchema(stringSchema()),
+  rfqId: optionalSchema(stringSchema()),
+  sellOrderId: optionalSchema(stringSchema()),
+  sellSubscriberId: optionalSchema(stringSchema()),
+  side: optionalSchema(enumSchema(["buy", "sell"])),
+  subscriberId: optionalSchema(stringSchema())
 });
 
-const settlementViewSchema = objectSchema<OperatorView["settlements"][number]>({
-  instructionId: stringSchema(),
-  executionId: stringSchema(),
-  status: enumSchema(["affirmed", "failed", "instructed", "pending", "settled"]),
+const settlementViewSchema = objectSchema<SettlementInstruction>({
+  buyOrderId: optionalSchema(stringSchema()),
   createdAt: stringSchema(),
+  dealerId: optionalSchema(stringSchema()),
+  executionId: stringSchema(),
+  instructionId: stringSchema(),
+  matchProposalId: optionalSchema(stringSchema()),
+  pairId: stringSchema(),
+  sellOrderId: optionalSchema(stringSchema()),
+  sellSubscriberId: optionalSchema(stringSchema()),
+  status: enumSchema(["affirmed", "failed", "instructed", "pending", "settled"]),
+  settlementAgentId: optionalSchema(stringSchema()),
+  settlementKind: optionalSchema(enumSchema(["dark_cross", "rfq_quote"])),
+  subscriberId: optionalSchema(stringSchema()),
+  updatedAt: stringSchema()
+});
+
+const darkOrderSchema = objectSchema<DarkOrder>({
+  cancelledAt: optionalSchema(stringSchema()),
+  cancelledBy: optionalSchema(stringSchema()),
+  clientOrderId: stringSchema(),
+  createdAt: stringSchema(),
+  executedAt: optionalSchema(stringSchema()),
+  executionId: optionalSchema(stringSchema()),
+  expiresAt: optionalSchema(stringSchema()),
+  instrumentId: stringSchema(),
+  limitPrice: numberSchema(),
+  orderId: stringSchema(),
+  pairId: stringSchema(),
+  quantity: numberSchema(),
+  side: enumSchema(["buy", "sell"]),
+  status: enumSchema(["cancelled", "executed", "expired", "open"]),
+  subscriberId: stringSchema(),
+  updatedAt: stringSchema()
+});
+
+const orderLockSchema = objectSchema<OrderLock>({
+  lockExpiresAt: stringSchema(),
+  lockId: stringSchema(),
+  lockedAt: stringSchema(),
+  lockedBy: stringSchema(),
+  orderId: stringSchema(),
+  pairId: stringSchema(),
+  proposalId: stringSchema(),
+  releasedAt: optionalSchema(stringSchema()),
+  releasedBy: optionalSchema(stringSchema()),
+  releaseReason: optionalSchema(enumSchema(["executed", "expired", "rejected"])),
+  status: enumSchema(["active", "expired", "released"]),
+  subscriberId: stringSchema(),
+  updatedAt: stringSchema()
+});
+
+const matchProposalSchema = objectSchema<MatchProposal>({
+  acceptedAt: optionalSchema(stringSchema()),
+  buyAcceptedAt: optionalSchema(stringSchema()),
+  buyLockId: stringSchema(),
+  buyOrderId: stringSchema(),
+  buyResponse: enumSchema(["accepted", "pending", "rejected"]),
+  buySubscriberId: stringSchema(),
+  createdAt: stringSchema(),
+  createdBy: stringSchema(),
+  executionId: optionalSchema(stringSchema()),
+  expiresAt: stringSchema(),
+  instrumentId: stringSchema(),
+  pairId: stringSchema(),
+  price: numberSchema(),
+  proposalId: stringSchema(),
+  quantity: numberSchema(),
+  rejectedAt: optionalSchema(stringSchema()),
+  rejectedBy: optionalSchema(stringSchema()),
+  rejectionReason: optionalSchema(stringSchema()),
+  sellAcceptedAt: optionalSchema(stringSchema()),
+  sellLockId: stringSchema(),
+  sellOrderId: stringSchema(),
+  sellResponse: enumSchema(["accepted", "pending", "rejected"]),
+  sellSubscriberId: stringSchema(),
+  status: enumSchema(["accepted", "executed", "expired", "pending", "rejected"]),
   updatedAt: stringSchema()
 });
 
@@ -568,14 +690,58 @@ export const markSettlementProgressionRequestSchema =
     status: enumSchema(["affirmed", "failed", "instructed", "pending", "settled"])
   });
 
+export const submitDarkOrderRequestSchema = objectSchema<SubmitDarkOrderRequest>({
+  clientOrderId: stringSchema(),
+  expiresAt: optionalSchema(stringSchema()),
+  instrumentId: stringSchema(),
+  limitPrice: numberSchema(),
+  quantity: numberSchema(),
+  side: enumSchema(["buy", "sell"])
+});
+
+const generateMatchProposalRequestSchemaBase = objectSchema<GenerateMatchProposalRequest>({
+  buyOrderId: optionalSchema(stringSchema()),
+  expiresAt: optionalSchema(stringSchema()),
+  sellOrderId: optionalSchema(stringSchema())
+});
+
+export const generateMatchProposalRequestSchema: Schema<GenerateMatchProposalRequest> = {
+  ...generateMatchProposalRequestSchemaBase,
+  parse(value, path = "$") {
+    const parsed = generateMatchProposalRequestSchemaBase.parse(value, path);
+
+    if ((parsed.buyOrderId === undefined) !== (parsed.sellOrderId === undefined)) {
+      throw new ContractValidationError(
+        path,
+        "buyOrderId and sellOrderId must either both be provided or both be omitted"
+      );
+    }
+
+    return parsed;
+  }
+};
+
+export const rejectMatchRequestSchema = objectSchema<RejectMatchRequest>({
+  reason: optionalSchema(stringSchema())
+});
+
 export const healthResponseSchema = objectSchema<HealthResponse>({
   service: enumSchema(["venue-api"]),
   generatedAt: stringSchema(),
   venue: venueHealthSchema
 });
 
+export const darkSubscriberStateResponseSchema = objectSchema<DarkSubscriberStateResponse>({
+  executions: arraySchema(executionViewSchema),
+  locks: arraySchema(orderLockSchema),
+  orders: arraySchema(darkOrderSchema),
+  proposals: arraySchema(matchProposalSchema),
+  settlements: arraySchema(settlementViewSchema),
+  subscriberId: stringSchema()
+});
+
 export const demoResetRequestSchema = objectSchema<DemoResetRequest>({
-  mode: enumSchema(["empty", "phase1-complete", "phase1-ready", "phase2-ready"]),
+  mode: enumSchema(["empty", "phase1-complete", "phase1-ready", "phase2-ready", "phase3-ready"]),
   seed: optionalSchema(numberSchema())
 });
 
@@ -584,13 +750,17 @@ export const demoClockAdvanceRequestSchema = objectSchema<DemoClockAdvanceReques
 });
 
 export const demoStatusResponseSchema = objectSchema<DemoStatusResponse>({
+  buyOrderId: optionalSchema(stringSchema()),
   currentTime: stringSchema(),
   dealerIds: arraySchema(stringSchema()),
-  mode: enumSchema(["empty", "phase1-complete", "phase1-ready", "phase2-ready"]),
+  mode: enumSchema(["empty", "phase1-complete", "phase1-ready", "phase2-ready", "phase3-ready"]),
   seed: numberSchema(),
   pairId: stringSchema(),
   operatorId: stringSchema(),
   dealerId: stringSchema(),
+  proposalId: optionalSchema(stringSchema()),
+  secondarySubscriberId: optionalSchema(stringSchema()),
+  sellOrderId: optionalSchema(stringSchema()),
   subscriberId: stringSchema()
 });
 
@@ -599,6 +769,9 @@ export const parseCreatePairRequest = (value: unknown): CreatePairRequest =>
 
 export const parseHealthResponse = (value: unknown): HealthResponse =>
   healthResponseSchema.parse(value);
+
+export const parseDarkSubscriberStateResponse = (value: unknown): DarkSubscriberStateResponse =>
+  darkSubscriberStateResponseSchema.parse(value);
 
 export const parseOperatorView = (value: unknown): OperatorView => operatorViewSchema.parse(value);
 
@@ -629,6 +802,15 @@ export const parseDemoClockAdvanceRequest = (value: unknown): DemoClockAdvanceRe
 export const parseDemoStatusResponse = (value: unknown): DemoStatusResponse =>
   demoStatusResponseSchema.parse(value);
 
+export const parseSubmitDarkOrderRequest = (value: unknown): SubmitDarkOrderRequest =>
+  submitDarkOrderRequestSchema.parse(value);
+
+export const parseGenerateMatchProposalRequest = (value: unknown): GenerateMatchProposalRequest =>
+  generateMatchProposalRequestSchema.parse(value);
+
+export const parseRejectMatchRequest = (value: unknown): RejectMatchRequest =>
+  rejectMatchRequestSchema.parse(value);
+
 export const contractSchemas = {
   CreatePairRequest: createPairRequestSchema,
   GrantAccessRequest: grantAccessRequestSchema,
@@ -640,6 +822,9 @@ export const contractSchemas = {
   WithdrawQuoteRequest: withdrawQuoteRequestSchema,
   RejectAllQuotesRequest: rejectAllQuotesRequestSchema,
   MarkSettlementProgressionRequest: markSettlementProgressionRequestSchema,
+  SubmitDarkOrderRequest: submitDarkOrderRequestSchema,
+  GenerateMatchProposalRequest: generateMatchProposalRequestSchema,
+  RejectMatchRequest: rejectMatchRequestSchema,
   OperatorView: operatorViewSchema,
   SubscriberView: subscriberViewSchema,
   DealerWorkbenchView: dealerWorkbenchViewSchema,
@@ -649,6 +834,7 @@ export const contractSchemas = {
   AuditTrailView: auditTrailViewSchema,
   VenueHealthReadModel: venueHealthSchema,
   HealthResponse: healthResponseSchema,
+  DarkSubscriberStateResponse: darkSubscriberStateResponseSchema,
   DemoResetRequest: demoResetRequestSchema,
   DemoClockAdvanceRequest: demoClockAdvanceRequestSchema,
   DemoStatusResponse: demoStatusResponseSchema
@@ -679,6 +865,64 @@ export const generateOpenApiDocument = () => ({
         }
       }
     },
+    "/demo/status": {
+      get: {
+        responses: {
+          "200": {
+            description: "Current demo bootstrap status",
+            content: {
+              "application/json": {
+                schema: ref("DemoStatusResponse")
+              }
+            }
+          }
+        }
+      }
+    },
+    "/demo/reset": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("DemoResetRequest")
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Demo state reset",
+            content: {
+              "application/json": {
+                schema: ref("DemoStatusResponse")
+              }
+            }
+          }
+        }
+      }
+    },
+    "/demo/clock/advance": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("DemoClockAdvanceRequest")
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Demo clock advanced",
+            content: {
+              "application/json": {
+                schema: ref("DemoStatusResponse")
+              }
+            }
+          }
+        }
+      }
+    },
     "/pairs": {
       post: {
         requestBody: {
@@ -699,6 +943,78 @@ export const generateOpenApiDocument = () => ({
             "application/json": {
               schema: ref("GrantAccessRequest")
             }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/dark-orders": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("SubmitDarkOrderRequest")
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/dark-orders/{orderId}/cancel": {
+      post: {
+        responses: {
+          "200": {
+            description: "Dark order cancelled"
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/match-proposals": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("GenerateMatchProposalRequest")
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/match-proposals/{proposalId}/accept": {
+      post: {
+        responses: {
+          "200": {
+            description: "Match proposal accepted"
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/match-proposals/{proposalId}/reject": {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: ref("RejectMatchRequest")
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/match-proposals/{proposalId}/release-expired": {
+      post: {
+        responses: {
+          "200": {
+            description: "Expired proposal locks released"
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/match-proposals/{proposalId}/execute": {
+      post: {
+        responses: {
+          "200": {
+            description: "Dark execution created"
           }
         }
       }
@@ -863,6 +1179,20 @@ export const generateOpenApiDocument = () => ({
             content: {
               "application/json": {
                 schema: ref("SubscriberView")
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pairs/{pairId}/views/dark-subscriber": {
+      get: {
+        responses: {
+          "200": {
+            description: "Dark subscriber scoped state",
+            content: {
+              "application/json": {
+                schema: ref("DarkSubscriberStateResponse")
               }
             }
           }

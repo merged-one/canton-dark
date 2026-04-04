@@ -101,7 +101,7 @@ const acceptQuoteForDealer = async (page: Page, dealerId: string): Promise<void>
   await row.getByRole("button", { name: "Accept quote" }).click();
 };
 
-test("@phase2 happy path across subscriber, three dealers, and operator", async ({
+test("@phase2 @smoke happy path across subscriber, three dealers, and operator", async ({
   browser,
   request
 }) => {

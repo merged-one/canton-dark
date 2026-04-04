@@ -172,7 +172,7 @@ export type ExecutionTicketView = ExecutionTicket;
 
 export type SettlementInstructionView = Pick<
   SettlementInstruction,
-  "createdAt" | "executionId" | "instructionId" | "status" | "updatedAt"
+  "createdAt" | "executionId" | "instructionId" | "pairId" | "status" | "updatedAt"
 >;
 
 export type AuditTrailEntryView = AuditRecord;
@@ -310,6 +310,7 @@ const projectExecution = (execution: ExecutionTicket): ExecutionTicketView => ex
 const projectSettlement = (instruction: SettlementInstruction): SettlementInstructionView => ({
   instructionId: instruction.instructionId,
   executionId: instruction.executionId,
+  pairId: instruction.pairId,
   status: instruction.status,
   createdAt: instruction.createdAt,
   updatedAt: instruction.updatedAt

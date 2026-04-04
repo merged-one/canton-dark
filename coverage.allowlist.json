@@ -1,0 +1,3 @@
+{
+  "aggregateExclusions": ["apps/venue-api/src/server.wiring.ts"]
+}

@@ -10,6 +10,9 @@ The Daml tree is split into seven packages:
 - `daml/phase3-dark-cross` contains the production `ATSPair` conditional dark-cross templates.
 - `daml/phase3-dark-cross-tests` contains script-based Phase 3 dark-cross lifecycle coverage.
 
-The local environment used for this prompt does not include the Daml SDK, so these packages
-were written and reconciled against the TypeScript model but could not be compiled or executed
-here.
+Use DPM and JDK 17+ for all local Daml work:
+
+- `pnpm test:daml`
+- `pnpm test:canton-integration`
+
+For Canton 3.4+, `daml build` and `daml test` are legacy entrypoints. The repo resolves and runs `dpm build` and `dpm test` directly.

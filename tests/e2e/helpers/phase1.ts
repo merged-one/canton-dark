@@ -4,6 +4,7 @@ import { parseDemoStatusResponse, type DemoStatusResponse } from "@canton-dark/a
 export const urls = {
   api: "http://127.0.0.1:4301",
   dealer: "http://127.0.0.1:4175",
+  demo: "http://127.0.0.1:4172",
   operator: "http://127.0.0.1:4173",
   subscriber: "http://127.0.0.1:4174"
 } as const;
@@ -20,7 +21,7 @@ export const authFiles = {
 
 export const resetDemo = async (
   request: APIRequestContext,
-  mode: "empty" | "phase1-complete" | "phase1-ready" | "phase2-ready"
+  mode: "empty" | "phase1-complete" | "phase1-ready" | "phase2-ready" | "phase3-ready"
 ): Promise<DemoStatusResponse> => {
   const response = await request.post(`${urls.api}/demo/reset`, {
     data: {

@@ -344,6 +344,7 @@ describe("query-model projectors", () => {
         {
           instructionId: "instruction-1",
           executionId: "execution-1",
+          pairId: "pair-1",
           status: "pending",
           createdAt: "2026-04-02T00:03:00.000Z",
           updatedAt: "2026-04-02T00:03:00.000Z"
@@ -440,6 +441,7 @@ describe("query-model projectors", () => {
         {
           instructionId: "instruction-1",
           executionId: "execution-1",
+          pairId: "pair-1",
           status: "pending",
           createdAt: "2026-04-02T00:03:00.000Z",
           updatedAt: "2026-04-02T00:03:00.000Z"
@@ -728,6 +730,45 @@ describe("query-model projectors", () => {
       },
       violations: ["Regulatory attestation is not active."]
     });
+  });
+
+  it("omits quote-ladder response windows when the RFQ does not define one", () => {
+    const ladder = projectSubscriberQuoteLadder({
+      invitations: [
+        {
+          invitationId: "rfq-no-window:dealer-alpha:1",
+          pairId: pair.pairId,
+          rfqId: "rfq-no-window",
+          dealerId: pair.dealerId,
+          subscriberId: "subscriber-1",
+          invitationVersion: 1,
+          invitedAt: "2026-04-02T00:01:30.000Z",
+          invitedBy: "subscriber-1",
+          responseWindowClosesAt: "2026-04-02T00:10:00.000Z",
+          status: "open"
+        }
+      ],
+      pair,
+      quotes: [
+        {
+          ...quote,
+          quoteId: "quote-no-window",
+          rfqId: "rfq-no-window"
+        }
+      ],
+      rfq: {
+        ...rfq,
+        rfqId: "rfq-no-window",
+        status: "open"
+      }
+    });
+
+    expect(ladder).toMatchObject({
+      pairId: pair.pairId,
+      rfqId: "rfq-no-window",
+      subscriberId: "subscriber-1"
+    });
+    expect(ladder).not.toHaveProperty("responseWindowClosesAt");
   });
 
   it("projects ATSPair quote ladders, dealer history, and blinded operator oversight without quote leakage", () => {

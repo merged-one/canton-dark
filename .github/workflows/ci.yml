@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm quality
+
+  unit-and-property:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm unit-and-property
+      - run: pnpm coverage:aggregate
+
+  contract-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm contract-tests
+
+  e2e-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e-smoke
+
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            artifacts/demo
+            playwright-report
+            test-results
+          retention-days: 14
+
+  canton-integration:
+    if: ${{ vars.CANTON_LEDGER_STACK_AVAILABLE == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - run: pnpm install --frozen-lockfile
+      - run: curl -fsSL https://get.digitalasset.com/install/install.sh | sh
+      - run: echo "$HOME/.dpm/bin" >> "$GITHUB_PATH"
+      - run: pnpm test:canton-integration

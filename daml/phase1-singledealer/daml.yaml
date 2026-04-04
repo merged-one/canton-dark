@@ -1,4 +1,4 @@
-sdk-version: 2.9.0
+sdk-version: 3.4.11
 name: canton-dark-phase1-singledealer
 version: 0.0.1
 source: src

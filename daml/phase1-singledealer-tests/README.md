@@ -2,3 +2,7 @@
 
 Script-based happy and unhappy path coverage for the single-dealer RFQ contracts lives
 here. The package is intentionally separate from production contracts.
+
+Run it through the repo entrypoint:
+
+- `pnpm test:daml`

@@ -490,6 +490,434 @@ describe("venue-api", () => {
     expect((rejectAllReply.body as { rfq: { status: string } }).rfq.status).toBe("rejected");
   });
 
+  it("serves phase 2 demo metadata and returns 404s for the remaining oversight query misses", async () => {
+    const api = await createVenueApiApp({
+      bootstrapMode: "phase2-ready",
+      seed: 77,
+      startAt: "2026-04-02T00:00:00.000Z"
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "GET",
+        url: "/demo/status"
+      })
+    ).toMatchObject({
+      status: 200,
+      body: {
+        dealerId: "dealer-alpha",
+        dealerIds: ["dealer-alpha", "dealer-beta", "dealer-gamma"],
+        mode: "phase2-ready",
+        operatorId: "operator-demo",
+        pairId: "pair-phase2-demo",
+        seed: 77,
+        subscriberId: "subscriber-1"
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: "/demo/reset",
+        body: {
+          mode: "phase2-ready"
+        }
+      })
+    ).toMatchObject({
+      status: 200,
+      body: {
+        mode: "phase2-ready",
+        pairId: "pair-phase2-demo"
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "GET",
+        url: "/pairs/missing/views/operator-oversight",
+        headers: {
+          "x-actor-id": "operator-demo"
+        }
+      })
+    ).toEqual({
+      status: 404,
+      body: {
+        message: "Pair missing was not found."
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "GET",
+        url: "/pairs/pair-phase2-demo/rfqs/missing/quote-ladder",
+        headers: {
+          "x-actor-id": "subscriber-1"
+        }
+      })
+    ).toEqual({
+      status: 404,
+      body: {
+        message: "RFQ missing was not found."
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "GET",
+        url: "/pairs/missing/dealers/dealer-alpha/history",
+        headers: {
+          "x-actor-id": "dealer-alpha"
+        }
+      })
+    ).toEqual({
+      status: 404,
+      body: {
+        message: "Pair missing was not found."
+      }
+    });
+  });
+
+  it("handles optional withdraw and reject-all reasons on live quote routes", async () => {
+    const api = await createVenueApiApp();
+
+    const pairReply = await api.handleRequest({
+      method: "POST",
+      url: "/pairs",
+      headers: {
+        "x-actor-id": "operator-optional"
+      },
+      body: {
+        mode: "SingleDealerPair",
+        operatorId: "operator-optional",
+        dealerId: "dealer-optional",
+        pairId: "pair-optional",
+        jurisdiction: "US",
+        rulebookVersion: "v1",
+        rulebookSummary: "optional branches"
+      }
+    });
+    const pairId = (pairReply.body as { pairId: string }).pairId;
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${pairId}/access`,
+        headers: {
+          "x-actor-id": "operator-optional"
+        },
+        body: {
+          subjectId: "subscriber-optional",
+          role: "subscriber"
+        }
+      })
+    ).toMatchObject({ status: 201 });
+
+    const withdrawRfqReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pairId}/rfqs`,
+      headers: {
+        "x-actor-id": "subscriber-optional"
+      },
+      body: {
+        instrumentId: "CUSIP-OPTIONAL-WITHDRAW",
+        side: "buy",
+        quantity: 5
+      }
+    });
+    const withdrawRfqId = (withdrawRfqReply.body as { rfqId: string }).rfqId;
+    const withdrawQuoteReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pairId}/rfqs/${withdrawRfqId}/quotes`,
+      headers: {
+        "x-actor-id": "dealer-optional"
+      },
+      body: {
+        price: 100.25,
+        quantity: 5,
+        expiresAt: "2026-04-02T00:20:00.000Z"
+      }
+    });
+    const withdrawQuoteId = (withdrawQuoteReply.body as { quote: { quoteId: string } }).quote.quoteId;
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${pairId}/quotes/${withdrawQuoteId}/withdraw`,
+        headers: {
+          "x-actor-id": "dealer-optional"
+        },
+        body: {}
+      })
+    ).toMatchObject({
+      status: 200,
+      body: {
+        quote: {
+          quoteId: withdrawQuoteId,
+          status: "withdrawn"
+        }
+      }
+    });
+
+    const rejectRfqReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${pairId}/rfqs`,
+      headers: {
+        "x-actor-id": "subscriber-optional"
+      },
+      body: {
+        instrumentId: "CUSIP-OPTIONAL-REJECT",
+        side: "sell",
+        quantity: 7
+      }
+    });
+    const rejectRfqId = (rejectRfqReply.body as { rfqId: string }).rfqId;
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${pairId}/rfqs/${rejectRfqId}/quotes`,
+        headers: {
+          "x-actor-id": "dealer-optional"
+        },
+        body: {
+          price: 99.75,
+          quantity: 7,
+          expiresAt: "2026-04-02T00:30:00.000Z"
+        }
+      })
+    ).toMatchObject({ status: 201 });
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${pairId}/rfqs/${rejectRfqId}/reject-all`,
+        headers: {
+          "x-actor-id": "subscriber-optional"
+        },
+        body: {
+          reason: "manual review"
+        }
+      })
+    ).toMatchObject({
+      status: 200,
+      body: {
+        rfq: {
+          rfqId: rejectRfqId,
+          status: "rejected",
+          rejectionReason: "manual review"
+        }
+      }
+    });
+  });
+
+  it("runs phase 3 dark-subscriber and match-proposal routes through typed endpoints", async () => {
+    const api = await createVenueApiApp({
+      bootstrapMode: "phase3-ready",
+      startAt: "2026-04-02T00:00:00.000Z"
+    });
+    const demoStatusReply = await api.handleRequest({
+      method: "GET",
+      url: "/demo/status"
+    });
+    const demoStatus = demoStatusReply.body as {
+      pairId: string;
+      secondarySubscriberId: string;
+      subscriberId: string;
+    };
+
+    expect(demoStatusReply).toMatchObject({
+      status: 200,
+      body: {
+        mode: "phase3-ready",
+        pairId: "pair-phase3-demo"
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "GET",
+        url: `/pairs/${demoStatus.pairId}/views/dark-subscriber`,
+        headers: {
+          "x-actor-id": demoStatus.subscriberId
+        }
+      })
+    ).toEqual({
+      status: 400,
+      body: {
+        message: "$.subscriberId: is required",
+        path: "$.subscriberId"
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "GET",
+        url: "/pairs/missing/views/dark-subscriber?subscriberId=subscriber-1",
+        headers: {
+          "x-actor-id": "subscriber-1"
+        }
+      })
+    ).toEqual({
+      status: 404,
+      body: {
+        message: "Pair missing was not found."
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "GET",
+        url: `/pairs/${demoStatus.pairId}/views/dark-subscriber?subscriberId=${demoStatus.subscriberId}`,
+        headers: {
+          "x-actor-id": demoStatus.subscriberId
+        }
+      })
+    ).toMatchObject({
+      status: 200,
+      body: {
+        subscriberId: demoStatus.subscriberId
+      }
+    });
+
+    const explicitBuyReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${demoStatus.pairId}/dark-orders`,
+      headers: {
+        "x-actor-id": demoStatus.subscriberId
+      },
+      body: {
+        clientOrderId: "buy-explicit",
+        instrumentId: "CUSIP-DARK-1",
+        side: "buy",
+        quantity: 10,
+        limitPrice: 101.25,
+        expiresAt: "2026-04-02T00:20:00.000Z"
+      }
+    });
+    const explicitSellReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${demoStatus.pairId}/dark-orders`,
+      headers: {
+        "x-actor-id": demoStatus.secondarySubscriberId
+      },
+      body: {
+        clientOrderId: "sell-explicit",
+        instrumentId: "CUSIP-DARK-1",
+        side: "sell",
+        quantity: 10,
+        limitPrice: 100.75,
+        expiresAt: "2026-04-02T00:20:00.000Z"
+      }
+    });
+    const explicitBuyId = (explicitBuyReply.body as { orderId: string }).orderId;
+    const explicitSellId = (explicitSellReply.body as { orderId: string }).orderId;
+
+    const explicitProposalReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${demoStatus.pairId}/match-proposals`,
+      headers: {
+        "x-actor-id": "operator-demo"
+      },
+      body: {
+        buyOrderId: explicitBuyId,
+        sellOrderId: explicitSellId,
+        expiresAt: "2026-04-02T00:25:00.000Z"
+      }
+    });
+    const explicitProposalId = (explicitProposalReply.body as { proposal: { proposalId: string } })
+      .proposal.proposalId;
+
+    expect(explicitProposalReply).toMatchObject({
+      status: 201,
+      body: {
+        proposal: {
+          proposalId: explicitProposalId
+        }
+      }
+    });
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${demoStatus.pairId}/match-proposals/${explicitProposalId}/reject`,
+        headers: {
+          "x-actor-id": demoStatus.subscriberId
+        },
+        body: {
+          reason: "manual reject"
+        }
+      })
+    ).toMatchObject({
+      status: 200,
+      body: {
+        proposal: {
+          proposalId: explicitProposalId,
+          rejectionReason: "manual reject",
+          status: "rejected"
+        }
+      }
+    });
+
+    await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${demoStatus.pairId}/dark-orders`,
+      headers: {
+        "x-actor-id": demoStatus.subscriberId
+      },
+      body: {
+        clientOrderId: "buy-implicit",
+        instrumentId: "CUSIP-DARK-1",
+        side: "buy",
+        quantity: 8,
+        limitPrice: 101
+      }
+    });
+    await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${demoStatus.pairId}/dark-orders`,
+      headers: {
+        "x-actor-id": demoStatus.secondarySubscriberId
+      },
+      body: {
+        clientOrderId: "sell-implicit",
+        instrumentId: "CUSIP-DARK-1",
+        side: "sell",
+        quantity: 8,
+        limitPrice: 100.5
+      }
+    });
+
+    const implicitProposalReply = await api.handleRequest({
+      method: "POST",
+      url: `/pairs/${demoStatus.pairId}/match-proposals`,
+      headers: {
+        "x-actor-id": "operator-demo"
+      },
+      body: {}
+    });
+    const implicitProposalId = (implicitProposalReply.body as { proposal: { proposalId: string } })
+      .proposal.proposalId;
+
+    expect(
+      await api.handleRequest({
+        method: "POST",
+        url: `/pairs/${demoStatus.pairId}/match-proposals/${implicitProposalId}/reject`,
+        headers: {
+          "x-actor-id": demoStatus.secondarySubscriberId
+        },
+        body: {}
+      })
+    ).toMatchObject({
+      status: 200,
+      body: {
+        proposal: {
+          proposalId: implicitProposalId,
+          status: "rejected"
+        }
+      }
+    });
+  });
+
   it("serves demo status, reset, and clock controls through typed routes", async () => {
     const api = await createVenueApiApp({
       bootstrapMode: "empty",

@@ -125,6 +125,7 @@ describe("render helpers", () => {
           createdAt: "2026-04-02T00:00:03.000Z",
           executionId: "execution-1",
           instructionId: "settlement-1",
+          pairId: "pair-1",
           status: "pending",
           updatedAt: "2026-04-02T00:00:03.000Z"
         }

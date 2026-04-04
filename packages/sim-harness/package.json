@@ -16,6 +16,7 @@
     "@canton-dark/adapters-memory": "workspace:*",
     "@canton-dark/app-services": "workspace:*",
     "@canton-dark/domain-core": "workspace:*",
+    "@canton-dark/telemetry": "workspace:*",
     "@canton-dark/testkit": "workspace:*"
   }
 }

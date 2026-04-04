@@ -5,6 +5,7 @@ dealer invitations, firm quotes, quote revisions, quote withdrawals, subscriber 
 comparison, and settlement progression separate from the Phase 1 single-dealer package
 so the single-dealer carve-out stays intact.
 
-The local environment used for this prompt does not include the Daml SDK, so this package
-was reconciled against the TypeScript domain model and script tests but could not be
-compiled or executed here.
+Build it with the repo-managed DPM toolchain:
+
+- `pnpm test:daml`
+- `pnpm test:canton-integration`
