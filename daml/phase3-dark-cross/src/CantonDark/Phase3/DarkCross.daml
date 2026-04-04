@@ -1,7 +1,5 @@
 module CantonDark.Phase3.DarkCross where
 
-import DA.Assert (assertMsg)
-import DA.List (elem)
 import CantonDark.Core.Types
 import qualified CantonDark.Phase2.ATSRfq as Phase2
 
@@ -138,9 +136,11 @@ template DarkPool
   with
     operator : Party
     pairId : Text
+    participants : [Party]
     createdAt : Time
   where
     signatory operator
+    observer participants
 
     ensure pairId /= ""
 
@@ -191,6 +191,7 @@ template DarkPool
               operator
               pairId
               subscriber
+              visibilityObservers = []
               orderId
               clientOrderId
               instrumentId
@@ -254,11 +255,13 @@ template DarkPool
           updatedAt = now
           activeLockId = Some buyLockId
           activeProposalId = Some proposalId
+          visibilityObservers = [sellOrder.subscriber]
         lockedSellCid <- create sellOrder with
           status = DarkLocked
           updatedAt = now
           activeLockId = Some sellLockId
           activeProposalId = Some proposalId
+          visibilityObservers = [buyOrder.subscriber]
         buyLockCid <- create OrderLock with
           operator
           pairId
@@ -266,6 +269,7 @@ template DarkPool
           orderId = buyOrderId
           proposalId
           subscriber = buyOrder.subscriber
+          visibilityObservers = [sellOrder.subscriber]
           lockedAt = now
           lockedBy = operator
           lockExpiresAt = expiresAt
@@ -281,6 +285,7 @@ template DarkPool
           orderId = sellOrderId
           proposalId
           subscriber = sellOrder.subscriber
+          visibilityObservers = [buyOrder.subscriber]
           lockedAt = now
           lockedBy = operator
           lockExpiresAt = expiresAt
@@ -328,6 +333,7 @@ template DarkOrder
     operator : Party
     pairId : Text
     subscriber : Party
+    visibilityObservers : [Party]
     orderId : Text
     clientOrderId : Text
     instrumentId : Text
@@ -345,7 +351,8 @@ template DarkOrder
     executedAt : Optional Time
     executionId : Optional Text
   where
-    signatory operator, subscriber
+    signatory operator
+    observer uniqueSorted (subscriber :: visibilityObservers)
 
     ensure
       pairId /= ""
@@ -399,6 +406,7 @@ template OrderLock
     orderId : Text
     proposalId : Text
     subscriber : Party
+    visibilityObservers : [Party]
     lockedAt : Time
     lockedBy : Party
     lockExpiresAt : Time
@@ -408,7 +416,8 @@ template OrderLock
     releasedBy : Optional Party
     releaseReason : Optional LockReleaseReason
   where
-    signatory operator, subscriber
+    signatory operator
+    observer uniqueSorted (subscriber :: visibilityObservers)
 
     ensure pairId /= "" && lockId /= "" && orderId /= "" && proposalId /= "" && lockExpiresAt > lockedAt
 
@@ -441,7 +450,8 @@ template MatchProposal
     rejectionReason : Optional Text
     executionId : Optional Text
   where
-    signatory operator, buySubscriber, sellSubscriber
+    signatory operator
+    observer uniqueSorted [buySubscriber, sellSubscriber]
 
     ensure
       pairId /= ""
@@ -523,11 +533,13 @@ template MatchProposal
           updatedAt = now
           activeLockId = None
           activeProposalId = None
+          visibilityObservers = []
         nextSellOrderCid <- create sellOrder with
           status = DarkOpen
           updatedAt = now
           activeLockId = None
           activeProposalId = None
+          visibilityObservers = []
         nextBuyLockCid <- create buyLock with
           updatedAt = now
           status = releasedLockStatus ReleasedOnReject
@@ -585,11 +597,13 @@ template MatchProposal
           updatedAt = now
           activeLockId = None
           activeProposalId = None
+          visibilityObservers = []
         nextSellOrderCid <- create sellOrder with
           status = DarkOpen
           updatedAt = now
           activeLockId = None
           activeProposalId = None
+          visibilityObservers = []
         nextBuyLockCid <- create buyLock with
           updatedAt = now
           status = releasedLockStatus ReleasedOnExpiry
@@ -647,6 +661,7 @@ template MatchProposal
           updatedAt = now
           activeLockId = None
           activeProposalId = None
+          visibilityObservers = []
           executedAt = Some now
           executionId = Some executionId
         nextSellOrderCid <- create sellOrder with
@@ -654,6 +669,7 @@ template MatchProposal
           updatedAt = now
           activeLockId = None
           activeProposalId = None
+          visibilityObservers = []
           executedAt = Some now
           executionId = Some executionId
         nextBuyLockCid <- create buyLock with

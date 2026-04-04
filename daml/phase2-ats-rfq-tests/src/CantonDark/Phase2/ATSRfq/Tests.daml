@@ -3,7 +3,6 @@ module CantonDark.Phase2.ATSRfq.Tests where
 import DA.Assert (assertEq)
 import DA.Date (date)
 import DA.Date.Types (Month(..))
-import DA.List (length)
 import DA.Time (addRelTime, minutes, time)
 import Daml.Script
 import CantonDark.Core.Types
@@ -127,13 +126,349 @@ setupFixture label startTime = script do
     subscriber
     subscriberGrantCid = subscriberGrant.grantCid
 
+openRfq :
+  Fixture ->
+  Text ->
+  Text ->
+  RFQSide ->
+  Decimal ->
+  Time ->
+  Script (ContractId RFQSession)
+openRfq fixture rfqId instrumentId side quantity responseWindowClosesAt =
+  submit fixture.subscriber do
+    exerciseCmd fixture.subscriberGrantCid OpenRfq with
+      instrumentId
+      pairCid = fixture.pairCid
+      quantity
+      responseWindowClosesAt
+      rfqId
+      side
+
+inviteDealers :
+  Fixture ->
+  ContractId RFQSession ->
+  [ContractId DealerInvitation] ->
+  [Party] ->
+  Script InvitationBatch
+inviteDealers fixture rfqCid existingInvitationCids dealers =
+  submit fixture.subscriber do
+    exerciseCmd rfqCid InviteDealers with
+      dealers
+      existingInvitationCids
+      pairCid = fixture.pairCid
+      subscriberGrantCid = fixture.subscriberGrantCid
+
+submitFirmQuote :
+  Party ->
+  ContractId AccessGrant ->
+  ContractId DealerInvitation ->
+  ContractId RFQSession ->
+  ContractId PairInstance ->
+  Text ->
+  Decimal ->
+  Decimal ->
+  Time ->
+  Script QuoteSubmission
+submitFirmQuote dealer dealerGrantCid invitationCid rfqCid pairCid quoteId price quotedQuantity expiresAt =
+  submit dealer do
+    exerciseCmd invitationCid SubmitQuote with
+      dealerGrantCid
+      expiresAt
+      pairCid
+      price
+      quoteId
+      quotedQuantity
+      rfqCid
+
 happyPath : Script ()
 happyPath = script do
-  pure ()
+  fixture <- setupFixture "happy" (time (date 2026 Apr 10) 0 0 0)
+  let responseWindowClosesAt = time (date 2026 Apr 10) 0 10 0
+  rfqCid <-
+    openRfq
+      fixture
+      "rfq-ats-happy"
+      "CUSIP-ATS-HAPPY"
+      Buy
+      12.0
+      responseWindowClosesAt
+  initialInvites <- inviteDealers fixture rfqCid [] [fixture.dealerAlpha, fixture.dealerBeta]
+  invitations <- query @DealerInvitation fixture.subscriber
+  alphaInvitationCid <- findOpenInvitationCid fixture.dealerAlpha invitations
+  betaInvitationCid <- findOpenInvitationCid fixture.dealerBeta invitations
+  now <- getTime
+  alphaQuoted <-
+    submitFirmQuote
+      fixture.dealerAlpha
+      fixture.dealerAlphaGrantCid
+      alphaInvitationCid
+      initialInvites.rfqCid
+      fixture.pairCid
+      "quote-alpha-happy"
+      99.4
+      12.0
+      (addRelTime now (minutes 5))
+  betaQuoted <-
+    submitFirmQuote
+      fixture.dealerBeta
+      fixture.dealerBetaGrantCid
+      betaInvitationCid
+      alphaQuoted.rfqCid
+      fixture.pairCid
+      "quote-beta-happy"
+      100.1
+      12.0
+      (addRelTime now (minutes 6))
+  revised <- submit fixture.dealerAlpha do
+    exerciseCmd alphaQuoted.quoteCid Revise with
+      newExpiresAt = addRelTime now (minutes 7)
+      newPrice = 99.1
+      newQuantity = 12.0
+      nextQuoteId = "quote-alpha-happy-revised"
+      pairCid = fixture.pairCid
+      rfqCid = betaQuoted.rfqCid
+      revisionId = "revision-alpha-happy"
+  comparisonCid <- submit fixture.subscriber do
+    exerciseCmd betaQuoted.rfqCid BuildQuoteComparison with
+      pairCid = fixture.pairCid
+      quoteCids = [revised.nextQuoteCid, betaQuoted.quoteCid]
+  accepted <- submit fixture.subscriber do
+    exerciseCmd betaQuoted.rfqCid AcceptSelectedQuote with
+      executionId = "execution-ats-happy"
+      instructionId = "settlement-ats-happy"
+      otherQuoteCids = [betaQuoted.quoteCid]
+      pairCid = fixture.pairCid
+      quoteCid = revised.nextQuoteCid
+      subscriberGrantCid = fixture.subscriberGrantCid
+  settlementCid <- submit fixture.operator do
+    exerciseCmd accepted.settlementInstructionCid MarkProgression with
+      nextStatus = SettlementAffirmed
+  previousQuoteView <- queryContractId fixture.subscriber revised.previousQuoteCid
+  acceptedQuoteView <- queryContractId fixture.subscriber accepted.quoteCid
+  rfqView <- queryContractId fixture.subscriber accepted.rfqCid
+  revisionView <- queryContractId fixture.subscriber revised.revisionCid
+  comparisonView <- queryContractId fixture.subscriber comparisonCid
+  operatorQuotes <- query @FirmQuote fixture.operator
+  executions <- query @ExecutionTicket fixture.operator
+  settlementView <- queryContractId fixture.operator settlementCid
+  case previousQuoteView of
+    Some quote -> do
+      assertEq QuoteStale quote.status
+      assertEq (Some "revised") quote.staleReason
+      assertEq (Some "quote-alpha-happy-revised") quote.replacementQuoteId
+    None -> abort "Expected stale previous quote after revision."
+  case accepted.staleQuoteCids of
+    [staleQuoteCid] -> do
+      staleQuoteView <- queryContractId fixture.subscriber staleQuoteCid
+      case staleQuoteView of
+        Some quote -> do
+          assertEq QuoteStale quote.status
+          assertEq (Some "accepted_elsewhere") quote.staleReason
+        None -> abort "Expected stale competing quote after acceptance."
+    _ -> abort "Expected exactly one stale competing quote."
+  case acceptedQuoteView of
+    Some quote -> do
+      assertEq QuoteAccepted quote.status
+      assertEq (Some fixture.subscriber) quote.acceptedBy
+    None -> abort "Expected accepted quote."
+  case rfqView of
+    Some rfq -> do
+      assertEq RfqAccepted rfq.status
+      assertEq (Some "quote-alpha-happy-revised") rfq.acceptedQuoteId
+    None -> abort "Expected accepted RFQ."
+  case revisionView of
+    Some revision -> do
+      assertEq "quote-alpha-happy" revision.previousQuoteId
+      assertEq "quote-alpha-happy-revised" revision.nextQuoteId
+    None -> abort "Expected quote revision record."
+  case comparisonView of
+    Some comparison ->
+      case comparison.entries of
+        firstEntry :: secondEntry :: [] -> do
+          assertEq QuoteOpen firstEntry.status
+          assertEq QuoteOpen secondEntry.status
+        _ -> abort "Expected two comparison entries."
+    None -> abort "Expected quote comparison artifact."
+  assertEq 0 (length operatorQuotes)
+  assertEq 1 (length executions)
+  case settlementView of
+    Some settlement -> assertEq SettlementAffirmed settlement.status
+    None -> abort "Expected affirmed settlement instruction."
 
 negativePaths : Script ()
 negativePaths = script do
-  pure ()
+  visibilityFixture <- setupFixture "visibility" (time (date 2026 Apr 11) 0 0 0)
+  auditor <- allocateParty "auditor-ats-visibility"
+  auditorGrant <- submit visibilityFixture.operator do
+    exerciseCmd visibilityFixture.pairCid GrantAccess with
+      grantId = "grant-auditor-visibility"
+      subject = auditor
+      role = AuditorRole
+      extraEntitlements = []
+      note = None
+  submitMustFail auditor do
+    exerciseCmd auditorGrant.grantCid OpenRfq with
+      instrumentId = "CUSIP-ATS-AUDITOR"
+      pairCid = auditorGrant.pairCid
+      quantity = 4.0
+      responseWindowClosesAt = time (date 2026 Apr 11) 0 5 0
+      rfqId = "rfq-ats-auditor"
+      side = Buy
+
+  revisionFixture <- setupFixture "revision-lock" (time (date 2026 Apr 12) 0 0 0)
+  let revisionWindowClosesAt = time (date 2026 Apr 12) 0 10 0
+  revisionRfqCid <-
+    openRfq
+      revisionFixture
+      "rfq-ats-revision-lock"
+      "CUSIP-ATS-REVISION-LOCK"
+      Buy
+      9.0
+      revisionWindowClosesAt
+  revisionInvites <- inviteDealers revisionFixture revisionRfqCid [] [revisionFixture.dealerAlpha, revisionFixture.dealerBeta]
+  revisionInvitationViews <- query @DealerInvitation revisionFixture.subscriber
+  revisionAlphaInvitationCid <- findOpenInvitationCid revisionFixture.dealerAlpha revisionInvitationViews
+  revisionNow <- getTime
+  revisionAlphaQuoted <-
+    submitFirmQuote
+      revisionFixture.dealerAlpha
+      revisionFixture.dealerAlphaGrantCid
+      revisionAlphaInvitationCid
+      revisionInvites.rfqCid
+      revisionFixture.pairCid
+      "quote-alpha-revision-lock"
+      100.3
+      9.0
+      (addRelTime revisionNow (minutes 5))
+  currentInvitationCids <- activeInvitationCids revisionFixture.subscriber
+  submitMustFail revisionFixture.subscriber do
+    exerciseCmd revisionAlphaQuoted.rfqCid InviteDealers with
+      dealers = [revisionFixture.dealerAlpha, revisionFixture.dealerGamma]
+      existingInvitationCids = currentInvitationCids
+      pairCid = revisionFixture.pairCid
+      subscriberGrantCid = revisionFixture.subscriberGrantCid
+  setTime (time (date 2026 Apr 12) 0 11 0)
+  submitMustFail revisionFixture.dealerAlpha do
+    exerciseCmd revisionAlphaQuoted.quoteCid Revise with
+      newExpiresAt = time (date 2026 Apr 12) 0 15 0
+      newPrice = 100.1
+      newQuantity = 9.0
+      nextQuoteId = "quote-alpha-revision-lock-late"
+      pairCid = revisionFixture.pairCid
+      rfqCid = revisionAlphaQuoted.rfqCid
+      revisionId = "revision-lock-late"
+
+  withdrawFixture <- setupFixture "withdraw-reject" (time (date 2026 Apr 13) 0 0 0)
+  let withdrawWindowClosesAt = time (date 2026 Apr 13) 0 10 0
+  withdrawRfqCid <-
+    openRfq
+      withdrawFixture
+      "rfq-ats-withdraw-reject"
+      "CUSIP-ATS-WITHDRAW"
+      Sell
+      6.0
+      withdrawWindowClosesAt
+  withdrawInvites <- inviteDealers withdrawFixture withdrawRfqCid [] [withdrawFixture.dealerAlpha, withdrawFixture.dealerBeta]
+  withdrawInvitationViews <- query @DealerInvitation withdrawFixture.subscriber
+  withdrawAlphaInvitationCid <- findOpenInvitationCid withdrawFixture.dealerAlpha withdrawInvitationViews
+  withdrawBetaInvitationCid <- findOpenInvitationCid withdrawFixture.dealerBeta withdrawInvitationViews
+  withdrawNow <- getTime
+  withdrawAlphaQuoted <-
+    submitFirmQuote
+      withdrawFixture.dealerAlpha
+      withdrawFixture.dealerAlphaGrantCid
+      withdrawAlphaInvitationCid
+      withdrawInvites.rfqCid
+      withdrawFixture.pairCid
+      "quote-alpha-withdraw"
+      101.2
+      6.0
+      (addRelTime withdrawNow (minutes 5))
+  withdrawBetaQuoted <-
+    submitFirmQuote
+      withdrawFixture.dealerBeta
+      withdrawFixture.dealerBetaGrantCid
+      withdrawBetaInvitationCid
+      withdrawAlphaQuoted.rfqCid
+      withdrawFixture.pairCid
+      "quote-beta-reject"
+      101.4
+      6.0
+      (addRelTime withdrawNow (minutes 6))
+  withdrawn <- submit withdrawFixture.dealerAlpha do
+    exerciseCmd withdrawAlphaQuoted.quoteCid Withdraw with
+      reason = Some "desk unavailable"
+      withdrawalId = "withdrawal-alpha"
+  submitMustFail withdrawFixture.dealerAlpha do
+    exerciseCmd withdrawn.quoteCid Withdraw with
+      reason = Some "duplicate"
+      withdrawalId = "withdrawal-alpha-second"
+  withdrawnQuoteView <- queryContractId withdrawFixture.subscriber withdrawn.quoteCid
+  case withdrawnQuoteView of
+    Some quote -> do
+      assertEq QuoteWithdrawn quote.status
+      assertEq (Some "desk unavailable") quote.withdrawalReason
+    None -> abort "Expected withdrawn quote."
+  rejectAll <- submit withdrawFixture.subscriber do
+    exerciseCmd withdrawBetaQuoted.rfqCid RejectAll with
+      openQuoteCids = [withdrawBetaQuoted.quoteCid]
+      reason = Some "no fit"
+      subscriberGrantCid = withdrawFixture.subscriberGrantCid
+  rejectAllAgain <- submit withdrawFixture.subscriber do
+    exerciseCmd rejectAll.rfqCid RejectAll with
+      openQuoteCids = []
+      reason = Some "ignored"
+      subscriberGrantCid = withdrawFixture.subscriberGrantCid
+  case rejectAll.staleQuoteCids of
+    [staleQuoteCid] -> do
+      staleQuoteView <- queryContractId withdrawFixture.subscriber staleQuoteCid
+      case staleQuoteView of
+        Some quote -> do
+          assertEq QuoteStale quote.status
+          assertEq (Some "rejected_all") quote.staleReason
+        None -> abort "Expected stale quote after reject-all."
+    _ -> abort "Expected one stale quote after reject-all."
+  rejectAllView <- queryContractId withdrawFixture.subscriber rejectAllAgain.rfqCid
+  case rejectAllView of
+    Some rfq -> do
+      assertEq RfqRejected rfq.status
+      assertEq (Some "no fit") rfq.rejectionReason
+    None -> abort "Expected rejected RFQ after reject-all."
+  assertEq 0 (length rejectAllAgain.staleQuoteCids)
+
+  expiryFixture <- setupFixture "expiry" (time (date 2026 Apr 14) 0 0 0)
+  expiryRfqCid <-
+    openRfq
+      expiryFixture
+      "rfq-ats-expiry"
+      "CUSIP-ATS-EXPIRY"
+      Buy
+      5.0
+      (time (date 2026 Apr 14) 0 10 0)
+  expiryInvites <- inviteDealers expiryFixture expiryRfqCid [] [expiryFixture.dealerAlpha]
+  expiryInvitationViews <- query @DealerInvitation expiryFixture.subscriber
+  expiryAlphaInvitationCid <- findOpenInvitationCid expiryFixture.dealerAlpha expiryInvitationViews
+  expiryNow <- getTime
+  expiryQuoted <-
+    submitFirmQuote
+      expiryFixture.dealerAlpha
+      expiryFixture.dealerAlphaGrantCid
+      expiryAlphaInvitationCid
+      expiryInvites.rfqCid
+      expiryFixture.pairCid
+      "quote-alpha-expiry"
+      99.8
+      5.0
+      (addRelTime expiryNow (minutes 1))
+  setTime (addRelTime expiryNow (minutes 2))
+  submitMustFail expiryFixture.subscriber do
+    exerciseCmd expiryQuoted.rfqCid AcceptSelectedQuote with
+      executionId = "execution-ats-expiry"
+      instructionId = "settlement-ats-expiry"
+      otherQuoteCids = []
+      pairCid = expiryFixture.pairCid
+      quoteCid = expiryQuoted.quoteCid
+      subscriberGrantCid = expiryFixture.subscriberGrantCid
 
 pauseAndUnpauseRestoresDirectedRfq : Script ()
 pauseAndUnpauseRestoresDirectedRfq = script do

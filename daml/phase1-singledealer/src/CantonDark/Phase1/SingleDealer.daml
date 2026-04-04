@@ -1,6 +1,5 @@
 module CantonDark.Phase1.SingleDealer where
 
-import DA.Assert (assertMsg)
 import CantonDark.Core.Types
 
 data PairContracts = PairContracts

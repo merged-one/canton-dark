@@ -184,7 +184,46 @@ expiredQuoteCannotBeAccepted = script do
 
 cancelAndRejectAreIdempotent : Script ()
 cancelAndRejectAreIdempotent = script do
-  pure ()
+  cancelFixture <- setupFixture "cancel-idempotent" (time (date 2026 Apr 5) 0 0 0)
+  cancellableRfqCid <- submit cancelFixture.subscriber do
+    exerciseCmd cancelFixture.subscriberGrantCid OpenRfq with
+      pairCid = cancelFixture.pairCid
+      rfqId = "rfq-cancel-idempotent"
+      instrumentId = "CUSIP-CANCEL-IDEMPOTENT"
+      side = Buy
+      quantity = 4.0
+  cancelledOnceCid <- submit (actAs [cancelFixture.dealer, cancelFixture.subscriber]) do
+    exerciseCmd cancellableRfqCid Cancel
+  cancelledTwiceCid <- submit (actAs [cancelFixture.dealer, cancelFixture.subscriber]) do
+    exerciseCmd cancelledOnceCid Cancel
+  cancelledView <- queryContractId cancelFixture.operator cancelledTwiceCid
+  case cancelledView of
+    Some rfq -> do
+      assertEq RfqCancelled rfq.status
+      assertEq (Some cancelFixture.subscriber) rfq.cancelledBy
+    None -> abort "Expected cancelled RFQ after repeated cancellation."
+
+  rejectFixture <- setupFixture "reject-idempotent" (time (date 2026 Apr 6) 0 0 0)
+  rejectableRfqCid <- submit rejectFixture.subscriber do
+    exerciseCmd rejectFixture.subscriberGrantCid OpenRfq with
+      pairCid = rejectFixture.pairCid
+      rfqId = "rfq-reject-idempotent"
+      instrumentId = "CUSIP-REJECT-IDEMPOTENT"
+      side = Sell
+      quantity = 8.0
+  rejectedOnceCid <- submit rejectFixture.dealer do
+    exerciseCmd rejectableRfqCid Reject with
+      reason = Some "desk declined"
+  rejectedTwiceCid <- submit rejectFixture.dealer do
+    exerciseCmd rejectedOnceCid Reject with
+      reason = Some "should stay unchanged"
+  rejectedView <- queryContractId rejectFixture.operator rejectedTwiceCid
+  case rejectedView of
+    Some rfq -> do
+      assertEq RfqRejected rfq.status
+      assertEq (Some rejectFixture.dealer) rfq.rejectedBy
+      assertEq (Some "desk declined") rfq.rejectionReason
+    None -> abort "Expected rejected RFQ after repeated rejection."
 
 quoteCannotBeAcceptedTwice : Script ()
 quoteCannotBeAcceptedTwice = script do

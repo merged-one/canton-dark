@@ -745,6 +745,7 @@ describe("query-model projectors", () => {
           invitedAt: "2026-04-02T00:01:30.000Z",
           invitedBy: "subscriber-1",
           responseWindowClosesAt: "2026-04-02T00:10:00.000Z",
+          updatedAt: "2026-04-02T00:01:30.000Z",
           status: "open"
         }
       ],

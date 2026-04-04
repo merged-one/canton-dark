@@ -462,17 +462,25 @@ const operatorFullOversightView = {
 const operatorFallbackView = {
   ...operatorFullOversightView,
   executions: [executionWithoutContext],
-  quoteLadders: [
-    {
-      ...operatorFullOversightView.quoteLadders[0],
-      quotes: [
-        {
-          ...operatorFullOversightView.quoteLadders[0].quotes[0],
-          rank: undefined
-        }
-      ]
+  quoteLadders: (() => {
+    const quoteLadder = operatorFullOversightView.quoteLadders[0];
+    const firstQuote = quoteLadder?.quotes[0];
+    if (!quoteLadder || !firstQuote) {
+      throw new Error("Expected operatorFullOversightView quote ladder fixture");
     }
-  ]
+
+    return [
+      {
+        ...quoteLadder,
+        quotes: [
+          {
+            ...firstQuote,
+            rank: undefined
+          }
+        ]
+      }
+    ];
+  })()
 };
 
 const subscriberReadyView = {
@@ -1839,11 +1847,9 @@ describe("ui-sdk controllers", () => {
     withdrawButton.click();
     await flushUpdates();
 
-    expect(
-      fetchImpl.mock.calls.some(([input]) =>
-        requestUrl(input as RequestInfo | URL).includes("/withdraw")
-      )
-    ).toBe(false);
+    expect(fetchImpl.mock.calls.some(([input]) => requestUrl(input).includes("/withdraw"))).toBe(
+      false
+    );
     expect(root.textContent).toContain("invite-latest");
     expect(root.textContent).toContain("execution-1");
     expect(root.textContent).toContain("n/a");

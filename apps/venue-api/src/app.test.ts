@@ -637,7 +637,8 @@ describe("venue-api", () => {
         expiresAt: "2026-04-02T00:20:00.000Z"
       }
     });
-    const withdrawQuoteId = (withdrawQuoteReply.body as { quote: { quoteId: string } }).quote.quoteId;
+    const withdrawQuoteId = (withdrawQuoteReply.body as { quote: { quoteId: string } }).quote
+      .quoteId;
 
     expect(
       await api.handleRequest({

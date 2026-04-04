@@ -1,7 +1,6 @@
 module CantonDark.Phase2.ATSRfq where
 
-import DA.Assert (assertMsg)
-import DA.List (elem, filter, length, sortBy)
+import DA.List (sortBy)
 import CantonDark.Core.Types
 
 data PairContracts = PairContracts
@@ -288,14 +287,12 @@ staleQuotesForReason reason now quoteCids =
   case quoteCids of
     [] -> pure []
     quoteCid :: rest -> do
-      quote <- fetch quoteCid
       nextRest <- staleQuotesForReason reason now rest
+      quote <- fetch quoteCid
       if quote.status == QuoteOpen then do
-        archive quoteCid
-        staleCid <- create quote with
-          status = QuoteStale
-          staleReason = Some reason
-          updatedAt = now
+        staleCid <- exercise quoteCid MarkStale with
+          reason
+          staleAt = now
         pure (staleCid :: nextRest)
       else
         pure nextRest
@@ -683,6 +680,66 @@ template RFQSession
             rejectionReason = reason
           pure RejectAllResult with rfqCid; staleQuoteCids
 
+    choice AcceptSelectedQuote : QuoteAcceptance
+      with
+        executionId : Text
+        instructionId : Text
+        otherQuoteCids : [ContractId FirmQuote]
+        pairCid : ContractId PairInstance
+        quoteCid : ContractId FirmQuote
+        subscriberGrantCid : ContractId AccessGrant
+      controller subscriber
+      do
+        pair <- fetch pairCid
+        subscriberGrant <- fetch subscriberGrantCid
+        quote <- fetch quoteCid
+        now <- getTime
+        assertPairActive pair
+        assertAcceptGrant subscriberGrant
+        assertMsg "Only quoted RFQs may accept a firm quote." (status == RfqQuoted)
+        assertMsg "Quote does not belong to this RFQ." (quote.rfqId == rfqId)
+        assertMsg "Quote subscriber does not match the RFQ owner." (quote.subscriber == subscriber)
+        assertMsg "Only open quotes may be accepted." (quote.status == QuoteOpen)
+        assertMsg "Firm quotes must be accepted before expiry." (now < quote.expiresAt)
+        assertNonEmpty "executionId" executionId
+        assertNonEmpty "instructionId" instructionId
+        acceptedQuoteCid <- exercise quoteCid MarkAccepted with
+          acceptedAt = now
+        staleQuoteCids <- staleQuotesForReason "accepted_elsewhere" now otherQuoteCids
+        nextRfqCid <- create this with
+          updatedAt = now
+          status = RfqAccepted
+          acceptedQuoteId = Some quote.quoteId
+        executionTicketCid <- create ExecutionTicket with
+          operator
+          pairId
+          executionId
+          rfqId
+          quoteId = quote.quoteId
+          dealer = quote.dealer
+          subscriber
+          instrumentId
+          side
+          quantity = quote.quantity
+          price = quote.price
+          acceptedAt = now
+        settlementInstructionCid <- create SettlementInstruction with
+          operator
+          pairId
+          instructionId
+          executionId
+          dealer = quote.dealer
+          subscriber
+          status = SettlementPending
+          createdAt = now
+          updatedAt = now
+        pure QuoteAcceptance with
+          executionTicketCid
+          quoteCid = acceptedQuoteCid
+          rfqCid = nextRfqCid
+          settlementInstructionCid
+          staleQuoteCids
+
     nonconsuming choice BuildQuoteComparison : ContractId QuoteComparison
       with
         pairCid : ContractId PairInstance
@@ -825,6 +882,31 @@ template FirmQuote
 
     ensure pairId /= "" && rfqId /= "" && quoteId /= "" && price > 0.0 && quantity > 0.0 && expiresAt > createdAt
 
+    choice MarkStale : ContractId FirmQuote
+      with
+        reason : Text
+        staleAt : Time
+      controller subscriber
+      do
+        assertNonEmpty "reason" reason
+        assertMsg "Only open quotes may become stale." (status == QuoteOpen)
+        create this with
+          updatedAt = staleAt
+          status = QuoteStale
+          staleReason = Some reason
+
+    choice MarkAccepted : ContractId FirmQuote
+      with
+        acceptedAt : Time
+      controller subscriber
+      do
+        assertMsg "Only open quotes may be accepted." (status == QuoteOpen)
+        create this with
+          updatedAt = acceptedAt
+          status = QuoteAccepted
+          acceptedAt = Some acceptedAt
+          acceptedBy = Some subscriber
+
     choice Revise : QuoteRevisionResult
       with
         newExpiresAt : Time
@@ -912,68 +994,6 @@ template FirmQuote
           withdrawnBy = dealer
           reason
         pure QuoteWithdrawalResult with quoteCid; withdrawalCid
-
-    choice Accept : QuoteAcceptance
-      with
-        executionId : Text
-        instructionId : Text
-        otherQuoteCids : [ContractId FirmQuote]
-        pairCid : ContractId PairInstance
-        rfqCid : ContractId RFQSession
-        subscriberGrantCid : ContractId AccessGrant
-      controller subscriber
-      do
-        pair <- fetch pairCid
-        subscriberGrant <- fetch subscriberGrantCid
-        rfq <- fetch rfqCid
-        now <- getTime
-        assertPairActive pair
-        assertAcceptGrant subscriberGrant
-        assertMsg "Only open quotes may be accepted." (status == QuoteOpen)
-        assertMsg "Only quoted RFQs may accept a firm quote." (rfq.status == RfqQuoted)
-        assertMsg "Firm quotes must be accepted before expiry." (now < expiresAt)
-        assertNonEmpty "executionId" executionId
-        assertNonEmpty "instructionId" instructionId
-        archive rfqCid
-        nextRfqCid <- create rfq with
-          updatedAt = now
-          status = RfqAccepted
-          acceptedQuoteId = Some quoteId
-        acceptedQuoteCid <- create this with
-          updatedAt = now
-          status = QuoteAccepted
-          acceptedAt = Some now
-          acceptedBy = Some subscriber
-        staleQuoteCids <- staleQuotesForReason "accepted_elsewhere" now otherQuoteCids
-        executionTicketCid <- create ExecutionTicket with
-          operator
-          pairId
-          executionId
-          rfqId
-          quoteId
-          dealer
-          subscriber
-          instrumentId = rfq.instrumentId
-          side = rfq.side
-          quantity
-          price
-          acceptedAt = now
-        settlementInstructionCid <- create SettlementInstruction with
-          operator
-          pairId
-          instructionId
-          executionId
-          dealer
-          subscriber
-          status = SettlementPending
-          createdAt = now
-          updatedAt = now
-        pure QuoteAcceptance with
-          executionTicketCid
-          quoteCid = acceptedQuoteCid
-          rfqCid = nextRfqCid
-          settlementInstructionCid
-          staleQuoteCids
 
 template QuoteRevision
   with
